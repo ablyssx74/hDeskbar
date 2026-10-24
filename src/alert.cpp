@@ -86,7 +86,7 @@ void PaintAbout(cairo_t* cr, const Alert* a)
 		return h;
 	};
 	show("hDeskbar", "Monospace Bold 15", 18, 24, { 0.10, 0.10, 0.16 });
-	DrawAboutIcon(cr, 22, 54, 112);
+	DrawSnakeTrackerIcon(cr, 22, 54, 112);
 	show("A Haiku Deskbar for Linux", "Monospace Bold Italic 10", 106, 160, { 0, 0, 0 });
 	const double boxX = 38, boxY = 198, boxW = 360 - 76, boxH = 172;
 	RoundedRectPath(cr, boxX, boxY, boxW, boxH, 12, 12, 12, 12);

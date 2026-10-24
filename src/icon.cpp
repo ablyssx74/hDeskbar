@@ -10,6 +10,8 @@
 #include <cmath>
 
 #include "about-icon-data.h"
+#include "icons.h"
+#include "scale.h"
 #include "icon-data.h"
 
 namespace {
@@ -63,7 +65,7 @@ void Draw(Cached* cache, const unsigned char* data, size_t length, cairo_t* cr, 
 	cairo_restore(cr);
 }
 
-Cached gBar, gAbout;
+Cached gBar;
 
 }	// namespace
 
@@ -72,7 +74,15 @@ void DrawSnakeTrackerIcon(cairo_t* cr, double x, double y, int size)
 	Draw(&gBar, kSnakeTrackerSvg, sizeof(kSnakeTrackerSvg), cr, x, y, size);
 }
 
-void DrawAboutIcon(cairo_t* cr, double x, double y, int size)
+
+IconRef AboutMenuIcon(int size)
 {
-	Draw(&gAbout, kAboutSvg, sizeof(kAboutSvg), cr, x, y, size);
+	const int pixels = static_cast<int>(std::lround(size * RenderScale()));
+	static Cached cache;
+	cairo_surface_t* surface = Render(&cache, kAboutSvg, sizeof(kAboutSvg), pixels);
+	if (surface == nullptr)
+		return nullptr;
+	// (the cache keeps one; the menu gets its own reference to the picture)
+	cairo_surface_reference(surface);
+	return MakeIconRef(surface);
 }

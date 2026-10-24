@@ -9,6 +9,7 @@
 #include "leaf.h"
 
 #include "alert.h"
+#include "icon.h"
 
 #include <gio/gdesktopappinfo.h>
 #include <gio/gio.h>
@@ -411,7 +412,7 @@ std::vector<MenuItem> LeafMenuItems()
 
 	MenuItem about;
 	about.label = "About hDeskbar";
-	about.iconName = "help-about";
+	about.icon = AboutMenuIcon(16);
 	about.action = []() { ShowAbout(); };
 	items.push_back(about);
 

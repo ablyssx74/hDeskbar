@@ -7,7 +7,7 @@ ProcessController, and a menu. It is drawn with cairo on a layer-shell surface, 
 It is a sibling of [hDesktop](https://github.com/ablyssx74/hDesktop) (the dock) and uses the same kind of backend: the
 compositor's window management protocols, StatusNotifierItem for the tray, PulseAudio for the volume.
 
-Status: **just started** (v0.21.3). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
+Status: **just started** (v0.21.4). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
 block) and its menu, the CPU graph, the clock, the volume icon, the system tray (with the programs' own menus), the program tabs and a settings window.
 
 ## Places
