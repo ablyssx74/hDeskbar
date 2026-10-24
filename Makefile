@@ -13,7 +13,7 @@ TARGET    = hdeskbar
 PROTO_DIR = protocols
 GEN_DIR   = build
 
-PROTOCOLS = xdg-shell wlr-layer-shell-unstable-v1
+PROTOCOLS = xdg-shell wlr-layer-shell-unstable-v1 plasma-window-management wlr-foreign-toplevel-management-unstable-v1
 
 PKGS = wayland-client cairo pangocairo librsvg-2.0 gdk-pixbuf-2.0 gio-unix-2.0 libpulse libpulse-mainloop-glib
 
@@ -59,6 +59,9 @@ $(TARGET): $(OBJECTS) $(PROTO_OBJECTS)
 
 install: $(TARGET)
 	install -Dm755 $(TARGET) $(DESTDIR)$(PREFIX)/bin/hdeskbar
+	sed 's|@BINDIR@|$(PREFIX)/bin|g' data/hdeskbar.desktop.in > $(GEN_DIR)/hdeskbar.desktop
+	install -Dm644 $(GEN_DIR)/hdeskbar.desktop $(DESTDIR)$(PREFIX)/share/applications/hdeskbar.desktop
+	install -Dm644 data/snaketracker.svg $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/hdeskbar.svg
 
 clean:
 	rm -rf $(GEN_DIR) $(TARGET)

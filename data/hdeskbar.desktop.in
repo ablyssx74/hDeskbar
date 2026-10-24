@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=hDeskbar
+GenericName=Deskbar
+Comment=The SnakeTracker Deskbar: program tabs, tray, clock, CPU graph and volume
+Exec=@BINDIR@/hdeskbar
+Icon=hdeskbar
+Terminal=false
+Categories=System;
+NoDisplay=true
+# KWin only hands this protocol to clients whose .desktop file asks for it.
+X-KDE-Wayland-Interfaces=org_kde_plasma_window_management

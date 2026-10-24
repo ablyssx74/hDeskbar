@@ -23,16 +23,19 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <string>
 #include <vector>
 
 #define namespace namespace_
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #undef namespace
+#include "apps.h"
 #include "cpu.h"
 #include "icon.h"
 #include "icons.h"
 #include "loop.h"
+#include "toplevels.h"
 #include "tray.h"
 #include "util.h"
 #include "volume.h"
@@ -40,6 +43,8 @@
 
 SystemTray gTray;
 VolumeControl gVolume;
+ToplevelManager gToplevels;
+AppDatabase* gApps = nullptr;
 
 namespace {
 
@@ -72,13 +77,20 @@ struct App {
 	wl_surface* surface = nullptr;
 	zwlr_layer_surface_v1* layerSurface = nullptr;
 	wl_seat* seat = nullptr;
+	wl_output* output = nullptr;
+	int outputHeight = 0;
+	org_kde_plasma_window_management* plasmaWindows = nullptr;
+	zwlr_foreign_toplevel_manager_v1* wlrToplevels = nullptr;
 	wl_pointer* pointer = nullptr;
 	GMainLoop* loop = nullptr;
 	bool showTray = true;
+	bool showTabs = true;
+	int hoverTab = -1, hoverRow = -1;
 	bool showVolume = true;
 	bool volumeDrag = false;
 	bool volumeMute = false;	// the press began on the speaker
 	bool clickFirst = false;
+	std::string debugClick;
 	bool redrawQueued = false;
 	double pointerX = -1, pointerY = -1;
 
@@ -104,6 +116,86 @@ struct Rect {
 	bool Contains(double px, double py) const { return px >= x && px < x + w && py >= y && py < y + h; }
 };
 
+
+// ---- the program tabs ----
+
+// The windows of one program (the way the Haiku Deskbar groups them by team), in the order the programs first appeared.
+struct Team {
+	std::string key, name, iconName;
+	std::vector<Toplevel*> windows;
+	bool collapsed = false;
+	Toplevel* latest = nullptr;		// the window that was in front last
+	bool active = false;			// one of its windows is the active one
+};
+
+std::vector<std::string> gTeamOrder;
+std::map<std::string, bool> gCollapsed;		// the programs whose windows are not listed under their tab
+
+std::string Capitalized(std::string s)
+{
+	if (!s.empty())
+		s[0] = static_cast<char>(g_ascii_toupper(s[0]));
+	return s;
+}
+
+std::vector<Team> BuildTeams()
+{
+	std::vector<Team> teams;
+	if (!gApp.showTabs)
+		return teams;
+	std::map<std::string, size_t> at;
+	for (Toplevel* window : gToplevels.Windows()) {
+		AppEntry* app = gApps != nullptr ? gApps->Resolve(window->appId) : nullptr;
+		const std::string key = app != nullptr ? app->id : ToLower(window->appId.empty() ? window->title : window->appId);
+		if (at.find(key) == at.end()) {
+			Team team;
+			team.key = key;
+			team.name = app != nullptr ? app->name : Capitalized(window->appId.empty() ? window->title : window->appId);
+			team.iconName = !window->themedIcon.empty() ? window->themedIcon : (app != nullptr ? app->iconName : window->appId);
+			team.collapsed = gCollapsed[key];
+			at[key] = teams.size();
+			teams.push_back(team);
+		}
+		Team& team = teams[at[key]];
+		team.windows.push_back(window);
+		if (window->activated)
+			team.active = true;
+		if (team.latest == nullptr || window->lastActivated > team.latest->lastActivated)
+			team.latest = window;
+	}
+	// the order the programs first came in: the ones that are gone are forgotten
+	std::vector<std::string> order;
+	for (const std::string& key : gTeamOrder) {
+		if (at.count(key))
+			order.push_back(key);
+	}
+	for (const Team& team : teams) {
+		if (std::find(order.begin(), order.end(), team.key) == order.end())
+			order.push_back(team.key);
+	}
+	gTeamOrder = order;
+	std::vector<Team> sorted;
+	for (const std::string& key : order)
+		sorted.push_back(teams[at[key]]);
+	return sorted;
+}
+
+struct TabRect {
+	Rect tab, chevron;
+	size_t team;
+};
+
+struct RowRect {
+	Rect row;
+	size_t team;
+	Toplevel* window;
+};
+
+struct BoxRect {
+	Rect box;
+	size_t team;
+};
+
 struct TrayCell {
 	TrayItem* item;
 	Rect cell;
@@ -114,14 +206,36 @@ struct Layout {
 	int width = 0, height = 0;		// what the bar needs (a horizontal bar's width is the screen's)
 	Rect header, graph, clock, volume;
 	std::vector<TrayCell> cells;
+	std::vector<Team> teams;
+	std::vector<TabRect> tabs;
+	std::vector<RowRect> rows;
+	std::vector<BoxRect> boxes;
 };
 
 constexpr int kCell = 22;				// a tray icon's cell
 constexpr int kTrayIcon = 16;
+constexpr int kTabHeight = 24;			// a program's tab
+constexpr int kWindowRow = 20;			// a window, under its program's tab
 constexpr int kVolumeRow = 20;			// the row of the volume slider in a vertical bar
 constexpr int kVolumeWidth = 84;		// and its width in a horizontal one
 constexpr int kSpeakerWidth = 20;		// the speaker at the slider's left end: it mutes
 constexpr int kHorizontalHeight = 26;
+
+// The width of a line of text in the bar's font.
+double TextWidth(const std::string& text)
+{
+	static cairo_surface_t* scratch = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+	static cairo_t* cr = cairo_create(scratch);
+	PangoLayout* layout = pango_cairo_create_layout(cr);
+	PangoFontDescription* font = pango_font_description_from_string("Sans 9");
+	pango_layout_set_font_description(layout, font);
+	pango_layout_set_text(layout, text.c_str(), -1);
+	int width = 0, height = 0;
+	pango_layout_get_pixel_size(layout, &width, &height);
+	pango_font_description_free(font);
+	g_object_unref(layout);
+	return width;
+}
 
 Layout MakeLayout(int width, int height)
 {
@@ -141,8 +255,32 @@ Layout MakeLayout(int width, int height)
 		}
 		for (size_t i = 0; i < items.size(); i++)
 			layout.cells.push_back({ items[i], { 5.0 + (i % columns) * kCell, top + (i / columns) * kCell, kCell, kCell } });
-		layout.height = 1 + kHeaderHeight + kRowHeight + (gApp.showVolume ? 2 + kVolumeRow : 0)
-			+ (rows > 0 ? 2 + rows * kCell + 2 : 0) + 1;
+		double y = 1.0 + kHeaderHeight + kRowHeight + (gApp.showVolume ? 2 + kVolumeRow : 0)
+			+ (rows > 0 ? 2 + rows * kCell + 2 : 0);
+		// the tabs: a program's tab, and under it, when it is open, the dark box with its windows. At the edge of the screen
+		// they run flush, and are round at the other end.
+		layout.teams = BuildTeams();
+		const bool flushRight = gApp.placement == Placement::TopRight || gApp.placement == Placement::BottomRight;
+		const double tabX = flushRight ? 3 : 1, tabW = width - 4.0;
+		y += 2;
+		for (size_t t = 0; t < layout.teams.size(); t++) {
+			const Team& team = layout.teams[t];
+			const Rect tab = { tabX, y, tabW, kTabHeight };
+			layout.tabs.push_back({ tab, { tab.x + tab.w - 22, y, 20, kTabHeight }, t });
+			y += kTabHeight;
+			if (!team.collapsed && !team.windows.empty()) {
+				const double boxX = flushRight ? tabX + 5 : tabX, boxW = tabW - 5;
+				const Rect box = { boxX, y - 6, boxW, 6.0 + team.windows.size() * kWindowRow + 4 };
+				layout.boxes.push_back({ box, t });
+				for (size_t w = 0; w < team.windows.size(); w++)
+					layout.rows.push_back({ { box.x + 1, y + w * kWindowRow, box.w - 2, kWindowRow }, t, team.windows[w] });
+				y += team.windows.size() * kWindowRow + 4;
+			}
+			y += 3;
+		}
+		layout.height = static_cast<int>(std::ceil(y)) + 1;
+		if (gApp.outputHeight > 0)
+			layout.height = std::min(layout.height, gApp.outputHeight);
 	} else {
 		layout.height = kHorizontalHeight;
 		layout.width = width;
@@ -154,9 +292,20 @@ Layout MakeLayout(int width, int height)
 			layout.cells.push_back({ items[i], { layout.graph.x - 6.0 - (items.size() - i) * kCell,
 				(kHorizontalHeight - kCell) / 2.0, kCell, kCell } });
 		}
+		double right = layout.cells.empty() ? layout.graph.x : layout.cells[0].cell.x;
 		if (gApp.showVolume) {
-			const double left = layout.cells.empty() ? layout.graph.x : layout.cells[0].cell.x;
-			layout.volume = { left - 8.0 - kVolumeWidth, (kHorizontalHeight - 18) / 2.0, kVolumeWidth, 18 };
+			layout.volume = { right - 8.0 - kVolumeWidth, (kHorizontalHeight - 18) / 2.0, kVolumeWidth, 18 };
+			right = layout.volume.x;
+		}
+		// the tabs, side by side after the header, as far as there is room
+		layout.teams = BuildTeams();
+		double x = layout.header.x + layout.header.w + 8;
+		for (size_t t = 0; t < layout.teams.size(); t++) {
+			const double w = std::clamp(TextWidth(layout.teams[t].name) + 54, 70.0, 180.0);
+			if (x + w > right - 8)
+				break;
+			layout.tabs.push_back({ { x, 2, w, kHorizontalHeight - 4.0 }, { x + w - 18, 2, 14, kHorizontalHeight - 4.0 }, t });
+			x += w + 4;
 		}
 	}
 	return layout;
@@ -335,6 +484,183 @@ void DrawVolume(cairo_t* cr, const Rect& r)
 	cairo_stroke(cr);
 }
 
+// ---- drawing the tabs ----
+
+// Text in one line, cut off with ... where it is too long, centered up and down in the height.
+void DrawLabel(cairo_t* cr, const std::string& text, double x, double y, double w, double h, const Color& color, double alpha = 1)
+{
+	if (w <= 0)
+		return;
+	PangoLayout* layout = pango_cairo_create_layout(cr);
+	PangoFontDescription* font = pango_font_description_from_string("Sans 9");
+	pango_layout_set_font_description(layout, font);
+	pango_layout_set_text(layout, text.c_str(), -1);
+	pango_layout_set_width(layout, static_cast<int>(w * PANGO_SCALE));
+	pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+	int textWidth = 0, textHeight = 0;
+	pango_layout_get_pixel_size(layout, &textWidth, &textHeight);
+	cairo_set_source_rgba(cr, color.r, color.g, color.b, alpha);
+	cairo_move_to(cr, x, y + (h - textHeight) / 2);
+	pango_cairo_show_layout(cr, layout);
+	pango_font_description_free(font);
+	g_object_unref(layout);
+}
+
+// A picture of an icon, size pixels square (a missing one leaves the place empty).
+void DrawIconAt(cairo_t* cr, const std::string& name, double x, double y, int size, double alpha = 1)
+{
+	IconRef icon = CachedIcon(name, size);
+	if (!icon)
+		icon = CachedIcon("application-x-executable", size);
+	if (!icon)
+		return;
+	const double width = cairo_image_surface_get_width(icon.get()), height = cairo_image_surface_get_height(icon.get());
+	cairo_save(cr);
+	cairo_translate(cr, x, y);
+	cairo_scale(cr, size / width, size / height);
+	cairo_set_source_surface(cr, icon.get(), 0, 0);
+	cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BEST);
+	cairo_paint_with_alpha(cr, alpha);
+	cairo_restore(cr);
+}
+
+// A bar that is round at both ends, or at one only: flush says which end is straight (-1 left, 1 right, 0 none). It is a bar
+// that runs on past the straight end, and the caller clips to the rectangle.
+void BarShape(cairo_t* cr, const Rect& r, int flush)
+{
+	const double radius = std::min(r.h / 2, 12.0);
+	double x = r.x, w = r.w;
+	if (flush < 0) {
+		x -= 2 * radius;
+		w += 2 * radius;
+	} else if (flush > 0)
+		w += 2 * radius;
+	RoundedRectPath(cr, x, r.y, w, r.h, radius, radius, radius, radius);
+}
+
+bool FlushRight()
+{
+	return gApp.placement == Placement::TopRight || gApp.placement == Placement::BottomRight;
+}
+
+// The program's tab: a raised bar in the SnakeTracker color that melts into the panel towards its straight end, with a shade
+// under it, the program's icon and name, and (in a vertical bar) the chevron that opens and closes its windows.
+void DrawTab(cairo_t* cr, const TabRect& tr, const Team& team, bool vertical, bool hover)
+{
+	const Rect& r = tr.tab;
+	const int flush = vertical ? (FlushRight() ? 1 : -1) : 0;
+	cairo_save(cr);
+	cairo_rectangle(cr, r.x, r.y, r.w, r.h);
+	cairo_clip(cr);
+
+	cairo_pattern_t* raised = cairo_pattern_create_linear(0, r.y, 0, r.y + r.h);
+	const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
+	cairo_pattern_add_color_stop_rgb(raised, 0, light.r, light.g, light.b);
+	cairo_pattern_add_color_stop_rgb(raised, 0.5, kAccent.r, kAccent.g, kAccent.b);
+	cairo_pattern_add_color_stop_rgb(raised, 1, dark.r, dark.g, dark.b);
+	BarShape(cr, r, flush);
+	cairo_set_source(cr, raised);
+	cairo_fill(cr);
+	cairo_pattern_destroy(raised);
+
+	// the left 30% keeps its color, then it melts into the panel's
+	cairo_pattern_t* fade = cairo_pattern_create_linear(r.x + r.w * 0.3, 0, r.x + r.w, 0);
+	cairo_pattern_add_color_stop_rgba(fade, 0, kPanel.r, kPanel.g, kPanel.b, 0);
+	cairo_pattern_add_color_stop_rgba(fade, 1, kPanel.r, kPanel.g, kPanel.b, 0.6);
+	BarShape(cr, r, flush);
+	cairo_set_source(cr, fade);
+	cairo_fill(cr);
+	cairo_pattern_destroy(fade);
+
+	if (team.active || hover) {
+		BarShape(cr, { r.x + 1, r.y + 1, r.w - 2, r.h - 2 }, flush);
+		cairo_set_source_rgba(cr, 1, 1, 1, team.active ? 0.20 : 0.10);
+		cairo_fill(cr);
+	}
+
+	// a shade along the bottom
+	cairo_pattern_t* shade = cairo_pattern_create_linear(0, r.y + r.h - 5, 0, r.y + r.h);
+	cairo_pattern_add_color_stop_rgba(shade, 0, 0, 0, 0, 0);
+	cairo_pattern_add_color_stop_rgba(shade, 1, 0, 0, 0, 0.28);
+	BarShape(cr, r, flush);
+	cairo_set_source(cr, shade);
+	cairo_fill(cr);
+	cairo_pattern_destroy(shade);
+	cairo_restore(cr);
+
+	const double leftEdge = flush < 0 ? r.x + 8 : r.x + 10;
+	DrawIconAt(cr, team.iconName, leftEdge, r.y + (r.h - 16) / 2, 16);
+	const double labelRight = vertical ? tr.chevron.x : r.x + r.w - 12;
+	DrawLabel(cr, team.name, leftEdge + 22, r.y, labelRight - (leftEdge + 22), r.h, {1, 1, 1});
+
+	if (vertical) {
+		// the chevron, a darker shade of the tab's color there
+		const Color under = Mix(Mix(kAccent, kPanel, 0.6), {0, 0, 0}, 0.34);
+		const double cx = tr.chevron.x + tr.chevron.w / 2, cy = r.y + r.h / 2;
+		cairo_set_source_rgb(cr, under.r, under.g, under.b);
+		cairo_set_line_width(cr, 1.6);
+		if (team.collapsed) {
+			cairo_move_to(cr, cx - 2, cy - 3.5);
+			cairo_line_to(cr, cx + 2, cy);
+			cairo_line_to(cr, cx - 2, cy + 3.5);
+		} else {
+			cairo_move_to(cr, cx - 3.5, cy - 2);
+			cairo_line_to(cr, cx, cy + 2);
+			cairo_line_to(cr, cx + 3.5, cy - 2);
+		}
+		cairo_stroke(cr);
+	}
+}
+
+// The dark box under a program's tab with its windows, and the windows in it.
+void DrawBox(cairo_t* cr, const Layout& layout, const BoxRect& br)
+{
+	const Rect& r = br.box;
+	const int flush = FlushRight() ? 1 : -1;
+	const Color box = Mix(kAccent, {0, 0, 0}, 0.45);
+	cairo_save(cr);
+	cairo_rectangle(cr, r.x - 1, r.y, r.w + 2, r.h + 3);
+	cairo_clip(cr);
+	// a soft shadow under it: two fainter copies, a pixel and two pixels lower
+	BarShape(cr, { r.x, r.y + 2, r.w, r.h }, flush);
+	cairo_set_source_rgba(cr, 0, 0, 0, 0.12);
+	cairo_fill(cr);
+	BarShape(cr, { r.x, r.y + 1, r.w, r.h }, flush);
+	cairo_set_source_rgba(cr, 0, 0, 0, 0.19);
+	cairo_fill(cr);
+	{
+		const double radius = 8;
+		double x = r.x, w = r.w;
+		if (flush < 0) { x -= 2 * radius; w += 2 * radius; } else w += 2 * radius;
+		RoundedRectPath(cr, x, r.y, w, r.h, radius, radius, radius, radius);
+		cairo_set_source_rgb(cr, box.r, box.g, box.b);
+		cairo_fill(cr);
+	}
+	cairo_restore(cr);
+
+	for (size_t i = 0; i < layout.rows.size(); i++) {
+		const RowRect& row = layout.rows[i];
+		if (row.team != br.team)
+			continue;
+		const bool hover = static_cast<int>(i) == gApp.hoverRow;
+		const Toplevel* window = row.window;
+		if (window->activated || hover) {
+			cairo_save(cr);
+			cairo_rectangle(cr, row.row.x, row.row.y, row.row.w, row.row.h);
+			cairo_clip(cr);
+			BarShape(cr, { row.row.x + (flush > 0 ? 4 : 0), row.row.y + 1, row.row.w - 4, row.row.h - 2 }, flush);
+			cairo_set_source_rgba(cr, kAccent.r, kAccent.g, kAccent.b, window->activated ? 0.95 : 0.50);
+			cairo_fill(cr);
+			cairo_restore(cr);
+		}
+		const std::string& icon = layout.teams[row.team].iconName;
+		const double left = row.row.x + (flush > 0 ? 10 : 8);
+		DrawIconAt(cr, icon, left, row.row.y + (row.row.h - 14) / 2, 14, window->minimized ? 0.5 : 1);
+		DrawLabel(cr, window->title, left + 20, row.row.y, row.row.x + row.row.w - 8 - (left + 20), row.row.h,
+			{245 / 255.0, 243 / 255.0, 252 / 255.0}, window->minimized ? 0.55 : 1);
+	}
+}
+
 // The tray's icons, each in its cell, the one under the pointer lit.
 void DrawTray(cairo_t* cr, const Layout& layout)
 {
@@ -411,6 +737,10 @@ void Draw(cairo_t* cr, const Layout& layout)
 	if (gApp.showVolume)
 		DrawVolume(cr, layout.volume);
 	DrawTray(cr, layout);
+	for (const BoxRect& box : layout.boxes)
+		DrawBox(cr, layout, box);
+	for (size_t i = 0; i < layout.tabs.size(); i++)
+		DrawTab(cr, layout.tabs[i], layout.teams[layout.tabs[i].team], vertical, static_cast<int>(i) == gApp.hoverTab);
 }
 
 // ---- the buffer ----
@@ -498,6 +828,24 @@ TrayCell* CellAt(double x, double y)
 	return nullptr;
 }
 
+int TabAt(double x, double y)
+{
+	for (size_t i = 0; i < gLayout.tabs.size(); i++) {
+		if (gLayout.tabs[i].tab.Contains(x, y))
+			return static_cast<int>(i);
+	}
+	return -1;
+}
+
+int RowAt(double x, double y)
+{
+	for (size_t i = 0; i < gLayout.rows.size(); i++) {
+		if (gLayout.rows[i].row.Contains(x, y))
+			return static_cast<int>(i);
+	}
+	return -1;
+}
+
 void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface*, wl_fixed_t x, wl_fixed_t y)
 {
 	gApp.pointerX = wl_fixed_to_double(x);
@@ -508,6 +856,7 @@ void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface*, wl_fixed_t x, wl_fi
 void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface*)
 {
 	gApp.pointerX = gApp.pointerY = -1;
+	gApp.hoverTab = gApp.hoverRow = -1;
 	Redraw();
 }
 
@@ -527,9 +876,13 @@ void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 		gVolume.SetLevel(static_cast<float>(VolumeAt(gApp.pointerX)));
 		return;
 	}
-	// (only a move from one cell to another needs a new picture)
-	if (CellAt(oldX, oldY) != CellAt(gApp.pointerX, gApp.pointerY))
+	// (only a move from one thing to another needs a new picture)
+	const int tab = TabAt(gApp.pointerX, gApp.pointerY), row = RowAt(gApp.pointerX, gApp.pointerY);
+	if (CellAt(oldX, oldY) != CellAt(gApp.pointerX, gApp.pointerY) || tab != gApp.hoverTab || row != gApp.hoverRow) {
+		gApp.hoverTab = tab;
+		gApp.hoverRow = row;
 		Redraw();
+	}
 }
 
 // A click on a tray icon.
@@ -568,8 +921,33 @@ void PointerButton(void*, wl_pointer*, uint32_t, uint32_t, uint32_t button, uint
 	if (state != WL_POINTER_BUTTON_STATE_RELEASED)
 		return;
 	TrayCell* cell = CellAt(gApp.pointerX, gApp.pointerY);
-	if (cell != nullptr)
+	if (cell != nullptr) {
 		ClickCell(cell, button);
+		return;
+	}
+	if (button != BTN_LEFT)
+		return;
+	const int row = RowAt(gApp.pointerX, gApp.pointerY);
+	if (row >= 0) {
+		// a window of the program: bring it to the front
+		gToplevels.Activate(gLayout.rows[row].window);
+		return;
+	}
+	const int tab = TabAt(gApp.pointerX, gApp.pointerY);
+	if (tab >= 0) {
+		const TabRect& hit = gLayout.tabs[tab];
+		const Team& team = gLayout.teams[hit.team];
+		if (IsVertical(gApp.placement) && hit.chevron.Contains(gApp.pointerX, gApp.pointerY)) {
+			gCollapsed[team.key] = !team.collapsed;
+			Redraw();
+		} else if (team.latest != nullptr) {
+			// the program's tab: its last window comes to the front; a lone window that is in front goes away
+			if (team.windows.size() == 1 && team.latest->activated && !team.latest->minimized)
+				gToplevels.Minimize(team.latest);
+			else
+				gToplevels.Activate(team.latest);
+		}
+	}
 }
 
 // The wheel over the slider changes the volume, two percent a notch.
@@ -625,13 +1003,35 @@ const zwlr_layer_surface_v1_listener kLayerListener = { LayerConfigure, LayerClo
 
 // ---- registry ----
 
+// The height of the screen: a vertical bar is no taller than that.
+void OutputGeometry(void*, wl_output*, int32_t, int32_t, int32_t, int32_t, int32_t, const char*, const char*, int32_t) {}
+void OutputMode(void*, wl_output*, uint32_t flags, int32_t, int32_t height, int32_t)
+{
+	if (flags & WL_OUTPUT_MODE_CURRENT)
+		gApp.outputHeight = height;
+}
+void OutputDone(void*, wl_output*) {}
+void OutputScale(void*, wl_output*, int32_t) {}
+
+const wl_output_listener kOutputListener = { OutputGeometry, OutputMode, OutputDone, OutputScale, nullptr, nullptr };
+
 void RegistryGlobal(void*, wl_registry* registry, uint32_t name, const char* interface, uint32_t version)
 {
 	if (strcmp(interface, wl_compositor_interface.name) == 0)
 		gApp.compositor = static_cast<wl_compositor*>(wl_registry_bind(registry, name, &wl_compositor_interface, 4));
 	else if (strcmp(interface, wl_shm_interface.name) == 0)
 		gApp.shm = static_cast<wl_shm*>(wl_registry_bind(registry, name, &wl_shm_interface, 1));
-	else if (strcmp(interface, wl_seat_interface.name) == 0) {
+	else if (strcmp(interface, wl_output_interface.name) == 0 && gApp.output == nullptr) {
+		gApp.output = static_cast<wl_output*>(wl_registry_bind(registry, name, &wl_output_interface, 2));
+		wl_output_add_listener(gApp.output, &kOutputListener, nullptr);
+	} else if (strcmp(interface, org_kde_plasma_window_management_interface.name) == 0 && version >= 17) {
+		// (the protocol wants at least version 17)
+		gApp.plasmaWindows = static_cast<org_kde_plasma_window_management*>(
+			wl_registry_bind(registry, name, &org_kde_plasma_window_management_interface, 21));
+	} else if (strcmp(interface, zwlr_foreign_toplevel_manager_v1_interface.name) == 0) {
+		gApp.wlrToplevels = static_cast<zwlr_foreign_toplevel_manager_v1*>(
+			wl_registry_bind(registry, name, &zwlr_foreign_toplevel_manager_v1_interface, 3));
+	} else if (strcmp(interface, wl_seat_interface.name) == 0) {
 		gApp.seat = static_cast<wl_seat*>(wl_registry_bind(registry, name, &wl_seat_interface, std::min(version, 5u)));
 		wl_seat_add_listener(gApp.seat, &kSeatListener, nullptr);
 	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0)
@@ -661,7 +1061,7 @@ bool ParsePlacement(const std::string& name, Placement* placement)
 
 void Usage(const char* program)
 {
-	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu] [--no-tray] [--no-volume]\n", program);
+	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu] [--no-tray] [--no-volume] [--no-tabs]\n", program);
 }
 
 }	// namespace
@@ -676,12 +1076,16 @@ int main(int argc, char** argv)
 			}
 		} else if (strcmp(argv[i], "--no-cpu") == 0) {
 			gApp.showCpu = false;
+		} else if (strcmp(argv[i], "--no-tabs") == 0) {
+			gApp.showTabs = false;
 		} else if (strcmp(argv[i], "--no-volume") == 0) {
 			gApp.showVolume = false;
 		} else if (strcmp(argv[i], "--no-tray") == 0) {
 			gApp.showTray = false;
 		} else if (strcmp(argv[i], "--click-first-tray-icon") == 0) {
 			gApp.clickFirst = true;		// for testing: a left and a right click on the first icon, after a few seconds
+		} else if (strcmp(argv[i], "--debug-click") == 0 && i + 1 < argc) {
+			gApp.debugClick = argv[++i];		// for testing: tab:N, chevron:N or row:N, clicked a few seconds after the start
 		} else if (strcmp(argv[i], "--debug") == 0) {
 			gDebugEnabled = true;
 		} else if (strcmp(argv[i], "--version") == 0) {
@@ -706,6 +1110,15 @@ int main(int argc, char** argv)
 		return 1;
 	}
 
+	wl_display_roundtrip(gApp.display);		// (the seat and the output tell what they have)
+	gApps = new AppDatabase();
+	gToplevels.onChanged = []() { Redraw(); };
+	gToplevels.Init(gApp.plasmaWindows, gApp.wlrToplevels, gApp.seat);
+	if (!gToplevels.Available()) {
+		WarnLog("no window-management protocol: the program tabs are left out.\n");
+		if (DesktopIs("KDE"))
+			WarnLog("On KDE Plasma, install hDeskbar (make install) so KWin gives it org_kde_plasma_window_management.\n");
+	}
 	gApp.surface = wl_compositor_create_surface(gApp.compositor);
 	gApp.layerSurface = zwlr_layer_shell_v1_get_layer_surface(gApp.layerShell, gApp.surface, nullptr,
 		ZWLR_LAYER_SHELL_V1_LAYER_TOP, "hdeskbar");
@@ -757,6 +1170,29 @@ int main(int argc, char** argv)
 		shownMinute = minute;
 		return G_SOURCE_CONTINUE;
 	}, nullptr);
+	if (!gApp.debugClick.empty()) {
+		RunAfter(5000, []() {
+			const size_t colon = gApp.debugClick.find(':');
+			const std::string what = gApp.debugClick.substr(0, colon);
+			const size_t n = colon == std::string::npos ? 0 : strtoul(gApp.debugClick.c_str() + colon + 1, nullptr, 10);
+			Rect r;
+			if (what == "tab" && n < gLayout.tabs.size())
+				r = gLayout.tabs[n].tab;
+			else if (what == "chevron" && n < gLayout.tabs.size())
+				r = gLayout.tabs[n].chevron;
+			else if (what == "row" && n < gLayout.rows.size())
+				r = gLayout.rows[n].row;
+			else {
+				DebugLog("debug click: nothing like %s\n", gApp.debugClick.c_str());
+				return;
+			}
+			gApp.pointerX = r.x + r.w / 2;
+			gApp.pointerY = r.y + r.h / 2;
+			DebugLog("debug click at %g,%g\n", gApp.pointerX, gApp.pointerY);
+			PointerButton(nullptr, nullptr, 0, 0, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+			PointerButton(nullptr, nullptr, 0, 0, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+		});
+	}
 	if (gApp.clickFirst) {
 		RunAfter(4000, []() {
 			if (!gLayout.cells.empty()) {

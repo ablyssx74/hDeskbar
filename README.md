@@ -7,8 +7,8 @@ ProcessController, and a menu. It is drawn with cairo on a layer-shell surface, 
 It is a sibling of [hDesktop](https://github.com/ablyssx74/hDesktop) (the dock) and uses the same kind of backend: the
 compositor's window management protocols, StatusNotifierItem for the tray, PulseAudio for the volume.
 
-Status: **just started** (v0.5.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
-block), the CPU graph, the clock, the volume slider and the system tray; nothing else is there yet.
+Status: **just started** (v0.6.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
+block), the CPU graph, the clock, the volume slider, the system tray and the program tabs; the menu is not there yet.
 
 ## Places
 - Vertical bars at the top left, top right, bottom left and bottom right of the screen.
@@ -17,9 +17,20 @@ block), the CPU graph, the clock, the volume slider and the system tray; nothing
 A corner of the bar that is a corner of the screen stays square; every other corner is round, and the bar has the Deskbar's
 one pixel outline all round.
 
-    hdeskbar --placement top-left|top-right|bottom-left|bottom-right|top|bottom [--no-cpu] [--no-tray] [--no-volume] [--debug]
+    hdeskbar --placement top-left|top-right|bottom-left|bottom-right|top|bottom [--no-cpu] [--no-tray] [--no-volume] [--no-tabs] [--debug]
 
-`--no-cpu` leaves the CPU graph out, `--no-tray` the tray and `--no-volume` the volume slider (settings will do that later).
+`--no-cpu` leaves the CPU graph out, `--no-tray` the tray, `--no-volume` the volume slider and `--no-tabs` the program tabs (settings
+will do that later).
+
+**Program tabs.** One tab for each program that has windows, in the order they first appeared, with the program's icon and name.
+In a vertical bar the windows of a program are listed in a dark box under its tab (the chevron closes and opens the box); in a
+horizontal bar the tabs are side by side. Clicking a tab brings the program's last window to the front (a lone window that is
+already in front is minimized); clicking a window in the box brings that window up. The shapes are straight where the bar is at
+the edge of the screen, and round at the other end, mirrored for a bar on the left.
+
+The window list comes from `wlr-foreign-toplevel-management` (Hyprland, Sway, niri, labwc, Wayfire...) or, on KDE, from
+`org_kde_plasma_window_management`, which KWin gives only to a program installed with a `.desktop` file that asks for it:
+on KDE run `sudo make install` first. (`data/hdeskbar.desktop.in` is that file.)
 
 The volume slider has a speaker at its left (click it to mute) and a groove with a knob: press and drag, or turn the wheel over
 it (two percent a notch). It follows the volume of the default output through PulseAudio, whoever changes it.
@@ -34,10 +45,10 @@ D-Bus (dbusmenu) will be drawn by hDeskbar itself when the menu code is in.
    (StatusNotifierItem), and hDesktop's CPU graph in the place of ProcessController. The tray, the CPU graph and the volume
    control can each be turned off.
 3. **Volume control** (done): hDesktop's PulseAudio code, with a slider like the Haiku Deskbar's.
-4. **Program tabs** from the compositor's window list, with icons; click to focus.
-5. **The expanded view** of the vertical bars: the dark box with each program's windows under its tab, in the shapes of
+4. **Program tabs** (done) from the compositor's window list, with icons; click to focus.
+5. **The expanded view** (done) of the vertical bars: the dark box with each program's windows under its tab, in the shapes of
    SnakeTracker 1.0.51 (straight at the screen's edge, round at the other end).
-6. **The horizontal bars**, with the tabs side by side.
+6. **The horizontal bars** (the tabs side by side are done; the list of a program's windows under its tab is not).
 7. **The menu** (an application menu built from `.desktop` files, in the snake trail look), opened from the header.
 8. **Settings**, and a PKGBUILD.
 

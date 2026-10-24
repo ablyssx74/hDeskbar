@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 
 #include <cstdarg>
+#include <cstdint>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -72,6 +73,11 @@ inline std::string Trim(const std::string& s)
 inline std::string HomeDir()
 {
 	return g_get_home_dir();
+}
+
+inline uint64_t NowMs()
+{
+	return g_get_monotonic_time() / 1000;
 }
 
 inline std::string ToLower(std::string s)
