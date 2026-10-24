@@ -1,0 +1,35 @@
+# Maintainer: Kris Beazley <hDesktop@epluribusunix.net>
+# Build and install on Arch / CachyOS:  makepkg -si
+pkgname=hdeskbar-git
+pkgver=0.21.4.r0.0000000
+pkgrel=1
+pkgdesc="The SnakeTracker Deskbar for Wayland (KDE Plasma, Hyprland, Sway, niri, labwc...)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/ablyssx74/hDeskbar"
+license=('MIT')
+depends=('wayland' 'cairo' 'pango' 'librsvg' 'gdk-pixbuf2' 'glib2' 'libpulse' 'curl')
+makedepends=('git')
+optdepends=('pavucontrol: mixer opened from the volume icon'
+            'power-profiles-daemon: "Power saving" toggle in the CPU menu')
+provides=('hdeskbar')
+conflicts=('hdeskbar')
+source=("hdeskbar::git+https://github.com/ablyssx74/hDeskbar.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd hdeskbar
+  printf "%s.r%s.%s" "$(tr -d 'v\n' < VERSION)" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd hdeskbar
+  # makepkg reuses src/ between runs; start from a clean build tree
+  make clean
+  make
+}
+
+package() {
+  cd hdeskbar
+  make PREFIX=/usr DESTDIR="$pkgdir" install
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -103,7 +103,7 @@ own (ContextMenu).
 6. **The horizontal bars** (done): the tabs side by side, and the list of a program's windows as a menu under its tab.
 7. **The menu** (done in a first form): the header opens a menu with the applications by category, power actions and quit.
 
-8. **Settings** (done), and a PKGBUILD.
+8. **Settings** (done), and a PKGBUILD (done).
 
 The Haiku Deskbar's four small corner layouts are not planned.
 
@@ -112,6 +112,13 @@ Needs `wayland`, `cairo`, `pango`, `librsvg`, `gdk-pixbuf2` and `glib2` `libpuls
 
     make
     ./hdeskbar --placement top-right
+
+## Install (Arch / CachyOS)
+    git clone https://github.com/ablyssx74/hDeskbar.git
+    cd hDeskbar
+    makepkg -si
+
+This installs `hdeskbar` in `/usr/bin`, with its launcher and icon (on KDE Plasma the launcher is what lets KWin give it the window list).
 
 Needs a compositor with `wlr-layer-shell` (KWin, Hyprland, Sway, niri, labwc...).
 
