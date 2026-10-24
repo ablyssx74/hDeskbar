@@ -98,14 +98,29 @@ void PaintAbout(cairo_t* cr, const Alert* a)
 	double y = boxY + 18;
 	y += show("Welcome to the hDeskbar Shell", "Monospace 7", boxX + 8, y, purple, textWidth) + 8;
 	y += show(">", "Monospace 7", boxX + 8, y, green, textWidth) + 2;
-	y += show("> Special thanks goes to Haiku and Linux for many years computer fun!", "Monospace 7", boxX + 8, y, green, textWidth) + 14;
+	{
+		// a sentence that wraps keeps its > on each line
+		const std::string sentence = "Special thanks goes to Haiku and Linux for many years computer fun!";
+		PangoLayout* measure = TextLayout(cr, "> ", "Monospace 7", 0);
+		int prefixWidth = 0, prefixHeight = 0;
+		pango_layout_get_pixel_size(measure, &prefixWidth, &prefixHeight);
+		g_object_unref(measure);
+		PangoLayout* wrapped = TextLayout(cr, sentence, "Monospace 7", textWidth - prefixWidth);
+		const int lines = pango_layout_get_line_count(wrapped);
+		for (int i = 0; i < lines; i++) {
+			PangoLayoutLine* line = pango_layout_get_line_readonly(wrapped, i);
+			y += show("> " + sentence.substr(line->start_index, line->length), "Monospace 7", boxX + 8, y, green, 0);
+		}
+		g_object_unref(wrapped);
+		y += 14 - 2;
+	}
 	show("> exit", "Monospace 7", boxX + 8, y, green, textWidth);
 	// a scroll bar that does not scroll: its track, and the pill that slides in it
 	const double barX = boxX + boxW - 16, barW = 7;
 	RoundedRectPath(cr, barX, boxY + 12, barW, boxH - 24, 3.5, 3.5, 3.5, 3.5);
 	cairo_set_source_rgba(cr, 1, 1, 1, 0.12);
 	cairo_fill(cr);
-	RoundedRectPath(cr, barX, boxY + 12, barW, (boxH - 24) * 0.55, 3.5, 3.5, 3.5, 3.5);
+	RoundedRectPath(cr, barX, boxY + 12 + (boxH - 24) * 0.45, barW, (boxH - 24) * 0.55, 3.5, 3.5, 3.5, 3.5);
 	cairo_set_source_rgba(cr, 1, 1, 1, 0.55);
 	cairo_fill(cr);
 }
