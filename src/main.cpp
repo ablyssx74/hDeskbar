@@ -1125,6 +1125,7 @@ void OpenLeafMenu()
 	anchor.w = static_cast<int>(gLayout.header.w);
 	anchor.h = static_cast<int>(gLayout.header.h);
 	anchor.above = BarIsAtBottom();
+	anchor.fromHeader = true;
 	if (IsVertical(gSettings.placement))
 		anchor.side = FlushRight() ? -1 : 1;
 	OpenMenu(LeafMenuItems(), anchor);

@@ -44,6 +44,7 @@ struct Popup {
 	int parentRow = -1;
 	int openRow = -1;			// the row whose submenu is open: it stays lit
 	int childSide = 0;			// where the open submenu is: 1 to the right of this menu, -1 to the left
+	bool barAbove = false;		// the bar this menu starts from is below it: the trail starts at the bottom
 	int trailSide = 0;			// the edge of this menu that faces its parent: -1 the left one, 1 the right one
 	double trailRowY = 0;		// where the parent's row is, in this menu's pixels (the trail's bar starts there)
 	int popupX = 0, popupY = 0;	// where the compositor put it, in its parent's pixels
@@ -173,6 +174,7 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 	const Popup* parent = p->parent;
 	// (the first menu of a bar at the side of the screen starts at the top of the bar, the way the Deskbar's leaf menu does)
 	const bool fromBar = parent == nullptr && p->trailSide != 0;
+	const float barEdge = p->barAbove ? static_cast<float>(H) : 0.0f;
 	const bool parentLink = fromBar || (parent != nullptr && p->trailSide != 0 && parent->openRow == p->parentRow
 		&& parent->childSide != 0 && (parent->hover < 0 || parent->hover == parent->openRow));
 	const bool parentOnLeft = p->trailSide < 0;
@@ -182,6 +184,8 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 	if (parentLink && !fromBar) {
 		pTop = static_cast<float>(p->trailRowY + 1);
 		pBottom = static_cast<float>(p->trailRowY + kRow - 1);
+	} else if (fromBar) {
+		pTop = pBottom = barEdge;
 	}
 	auto cornerR = [&](bool flush, bool exposed) { return (!flush || exposed) ? kR : 0.0f; };
 	auto addPiece = [&](float top, float bottom, bool childEdge, bool childOnRight, bool onTrail) {
@@ -257,8 +261,8 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 	// the pill: the corner next to the parent is square, and so is the one at the bottom when this level ends within its parent's height
 	const bool overParent = (parent != nullptr || fromBar) && p->trailSide != 0;
 	const bool squareBottom = overParent && parent != nullptr && p->popupY + p->height <= parent->height;
-	const double tlR = (overParent && parentOnLeft) ? 0.0 : kMenuRadius, trR = (overParent && !parentOnLeft) ? 0.0 : kMenuRadius;
-	const double blR = (squareBottom && parentOnLeft) ? 0.0 : kMenuRadius, brR = (squareBottom && !parentOnLeft) ? 0.0 : kMenuRadius;
+	const double tlR = (overParent && parentOnLeft && !(fromBar && p->barAbove)) ? 0.0 : kMenuRadius, trR = (overParent && !parentOnLeft) ? 0.0 : kMenuRadius;
+	const double blR = ((squareBottom || (fromBar && p->barAbove)) && parentOnLeft) ? 0.0 : kMenuRadius, brR = (squareBottom && !parentOnLeft) ? 0.0 : kMenuRadius;
 	RoundedRectPath(cr, 0, 0, w, h, tlR, trR, brR, blR);
 	cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
 	cairo_fill(cr);
@@ -729,9 +733,14 @@ void OpenMenu(std::vector<MenuItem> items, const MenuAnchor& anchor)
 			XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y);
 		return;
 	}
+	if (anchor.fromHeader) {
+		raw->trailSide = -1;		// the trail runs down the edge at the header's side, from the bar
+		raw->barAbove = anchor.above;
+	}
 	Create(raw, nullptr, anchor.x, anchor.y, anchor.w, anchor.h,
 		anchor.above ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_BOTTOM_LEFT,
-		anchor.above ? XDG_POSITIONER_GRAVITY_TOP_RIGHT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, 0, 0,
+		anchor.above ? XDG_POSITIONER_GRAVITY_TOP_RIGHT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, 0,
+		anchor.fromHeader ? (anchor.above ? 5 : -5) : 0,		// (over the bar's edge)
 		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y
 			| XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y);
 }
