@@ -23,9 +23,9 @@
 
 namespace {
 
-constexpr int kWidth = 360, kHeight = 376;
+constexpr int kWidth = 360, kHeight = 406;
 
-enum Kind { kCheckTabs, kCheckTray, kCheckCpu, kCheckVolume, kPlace, kColor, kClose };
+enum Kind { kCheckTabs, kCheckTray, kCheckCpu, kCheckVolume, kCheck24, kPlace, kColor, kClose };
 
 struct Hit {
 	double x, y, w, h;
@@ -61,9 +61,10 @@ void MakeHits(Window* w)
 	w->hits.push_back({ left, 68, 300, 22, kCheckTray, 0 });
 	w->hits.push_back({ left, 92, 300, 22, kCheckCpu, 0 });
 	w->hits.push_back({ left, 116, 300, 22, kCheckVolume, 0 });
+	w->hits.push_back({ left, 140, 300, 22, kCheck24, 0 });
 	for (int i = 0; i < 6; i++)
-		w->hits.push_back({ left + (i % 2) * 160.0, 168 + (i / 2) * 24.0, 150, 22, kPlace, i });
-	w->hits.push_back({ left, 286, 150, 30, kColor, 0 });
+		w->hits.push_back({ left + (i % 2) * 160.0, 198 + (i / 2) * 24.0, 150, 22, kPlace, i });
+	w->hits.push_back({ left, 316, 150, 30, kColor, 0 });
 	w->hits.push_back({ kWidth - 24 - 80.0, kHeight - 24 - 26.0, 80, 26, kClose, 0 });
 }
 
@@ -89,6 +90,7 @@ bool Checked(Kind kind)
 		case kCheckTray: return gSettings.showTray;
 		case kCheckCpu: return gSettings.showCpu;
 		case kCheckVolume: return gSettings.showVolume;
+		case kCheck24: return gSettings.clock24;
 		default: return false;
 	}
 }
@@ -103,8 +105,8 @@ void Paint(Window* w)
 		cairo_paint(cr);
 
 		Text(cr, "Show", 16, 26, true, ink);
-		Text(cr, "Place", 16, 150, true, ink);
-		Text(cr, "SnakeTracker color", 16, 268, true, ink);
+		Text(cr, "Place", 16, 180, true, ink);
+		Text(cr, "SnakeTracker color", 16, 298, true, ink);
 
 		for (size_t i = 0; i < w->hits.size(); i++) {
 			const Hit& hit = w->hits[i];
@@ -113,8 +115,9 @@ void Paint(Window* w)
 				case kCheckTabs:
 				case kCheckTray:
 				case kCheckCpu:
-				case kCheckVolume: {
-					static const char* const labels[] = { "Program tabs", "System tray", "CPU graph", "Volume icon" };
+				case kCheckVolume:
+				case kCheck24: {
+					static const char* const labels[] = { "Program tabs", "System tray", "CPU graph", "Volume icon", "24-hour clock" };
 					const double bx = hit.x, by = hit.y + (hit.h - 14) / 2;
 					RoundedRectPath(cr, bx, by, 14, 14, 3, 3, 3, 3);
 					cairo_set_source_rgb(cr, 1, 1, 1);
@@ -291,6 +294,7 @@ void SettingsPointerButton(uint32_t button, uint32_t state)
 		case kCheckTray: gSettings.showTray = !gSettings.showTray; break;
 		case kCheckCpu: gSettings.showCpu = !gSettings.showCpu; break;
 		case kCheckVolume: gSettings.showVolume = !gSettings.showVolume; break;
+		case kCheck24: gSettings.clock24 = !gSettings.clock24; break;
 		case kPlace: gSettings.placement = kPlaces[hit.index].placement; break;
 		case kColor:
 			OpenColorWindow("Accent color", gSettings.accent, Color{ 70 / 255.0, 110 / 255.0, 200 / 255.0 },

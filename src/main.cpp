@@ -369,7 +369,7 @@ void DrawClock(cairo_t* cr, double x, double y, double w, double h)
 	struct tm local;
 	localtime_r(&now, &local);
 	char text[32];
-	strftime(text, sizeof(text), "%-I:%M %p", &local);
+	strftime(text, sizeof(text), gSettings.clock24 ? "%H:%M" : "%-I:%M %p", &local);
 
 	PangoLayout* layout = pango_cairo_create_layout(cr);
 	PangoFontDescription* font = pango_font_description_from_string("Sans 9");
