@@ -171,13 +171,15 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 	std::vector<Piece> pieces;
 	std::vector<Fillet> fillets;
 	const Popup* parent = p->parent;
-	const bool parentLink = parent != nullptr && p->trailSide != 0 && parent->openRow == p->parentRow && parent->childSide != 0
-		&& (parent->hover < 0 || parent->hover == parent->openRow);
+	// (the first menu of a bar at the side of the screen starts at the top of the bar, the way the Deskbar's leaf menu does)
+	const bool fromBar = parent == nullptr && p->trailSide != 0;
+	const bool parentLink = fromBar || (parent != nullptr && p->trailSide != 0 && parent->openRow == p->parentRow
+		&& parent->childSide != 0 && (parent->hover < 0 || parent->hover == parent->openRow));
 	const bool parentOnLeft = p->trailSide < 0;
 	const bool opened = p->openRow >= 0 && p->childSide != 0;
 	const int own = opened ? p->openRow : p->hover;		// my row on the trail
 	float pTop = 0, pBottom = 0;
-	if (parentLink) {
+	if (parentLink && !fromBar) {
 		pTop = static_cast<float>(p->trailRowY + 1);
 		pBottom = static_cast<float>(p->trailRowY + kRow - 1);
 	}
@@ -253,8 +255,8 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 	}
 
 	// the pill: the corner next to the parent is square, and so is the one at the bottom when this level ends within its parent's height
-	const bool overParent = parent != nullptr && p->trailSide != 0;
-	const bool squareBottom = overParent && p->popupY + p->height <= parent->height;
+	const bool overParent = (parent != nullptr || fromBar) && p->trailSide != 0;
+	const bool squareBottom = overParent && parent != nullptr && p->popupY + p->height <= parent->height;
 	const double tlR = (overParent && parentOnLeft) ? 0.0 : kMenuRadius, trR = (overParent && !parentOnLeft) ? 0.0 : kMenuRadius;
 	const double blR = (squareBottom && parentOnLeft) ? 0.0 : kMenuRadius, brR = (squareBottom && !parentOnLeft) ? 0.0 : kMenuRadius;
 	RoundedRectPath(cr, 0, 0, w, h, tlR, trR, brR, blR);
@@ -720,6 +722,7 @@ void OpenMenu(std::vector<MenuItem> items, const MenuAnchor& anchor)
 	if (anchor.side != 0) {
 		// beside the rectangle, level with its top (the way the Deskbar's menu opens from a bar at the side of the screen)
 		const bool left = anchor.side < 0;
+		raw->trailSide = -anchor.side;
 		Create(raw, nullptr, anchor.x, anchor.y, anchor.w, anchor.h,
 			left ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_TOP_RIGHT,
 			left ? XDG_POSITIONER_GRAVITY_BOTTOM_LEFT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, 0, 0,
