@@ -15,13 +15,21 @@ struct Color {
 	double r, g, b;
 };
 
-constexpr Color kPanel = {200 / 255.0, 203 / 255.0, 235 / 255.0};		// the lavender panel
 constexpr Color kOutline = {20 / 255.0, 22 / 255.0, 30 / 255.0};		// the line round the bar
-constexpr Color kAccent = {70 / 255.0, 110 / 255.0, 200 / 255.0};		// the SnakeTracker color
+inline Color kAccent = {70 / 255.0, 110 / 255.0, 200 / 255.0};			// the SnakeTracker color
+inline Color kPanel = {200 / 255.0, 203 / 255.0, 235 / 255.0};			// the lavender panel: a light tint of it
 
 inline Color Mix(const Color& a, const Color& b, double t)
 {
 	return { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t };
+}
+
+// The panel is the accent color in a light tint (for the default blue, the lavender of the Haiku Deskbar).
+inline void SetAccent(const Color& accent)
+{
+	kAccent = accent;
+	const Color tint = {1.0, 0.953, 0.98};
+	kPanel = Mix(accent, tint, 0.7);
 }
 
 // A rectangle with a radius for each of its corners (0 for a square one).

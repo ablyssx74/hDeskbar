@@ -37,6 +37,7 @@
 #include "leaf.h"
 #include "loop.h"
 #include "menu.h"
+#include "settings.h"
 #include "style.h"
 #include "toplevels.h"
 #include "tray.h"
@@ -52,8 +53,6 @@ ToplevelManager gToplevels;
 AppDatabase* gApps = nullptr;
 
 namespace {
-
-enum class Placement { TopLeft, TopRight, BottomLeft, BottomRight, Top, Bottom };
 
 constexpr double kRadius = 7;
 constexpr int kHeaderHeight = 24;		// the block with the icon (a vertical bar)
@@ -79,21 +78,17 @@ struct App {
 	zwlr_foreign_toplevel_manager_v1* wlrToplevels = nullptr;
 	wl_pointer* pointer = nullptr;
 	GMainLoop* loop = nullptr;
-	bool showTray = true;
-	bool showTabs = true;
 	int hoverTab = -1, hoverRow = -1;
-	bool showVolume = true;
 	bool volumeDrag = false;
 	bool volumeMute = false;	// the press began on the speaker
 	bool clickFirst = false;
-	std::string debugClick, debugSubmenus;
+	std::string debugClick, debugSubmenus, debugSettings;
+	Placement shownPlacement = Placement::TopRight;
 	bool redrawQueued = false;
 	double pointerX = -1, pointerY = -1;
 
-	Placement placement = Placement::TopRight;
 	int width = 150, height = 2 + kHeaderHeight + kRowHeight;		// what the bar asks for (a horizontal bar's width is the screen's)
 	bool configured = false;
-	bool showCpu = true;
 	CpuSampler cpu;
 	std::vector<float> cpuShown;	// the bars as drawn: the loads, smoothed
 };
@@ -137,7 +132,7 @@ std::string Capitalized(std::string s)
 std::vector<Team> BuildTeams()
 {
 	std::vector<Team> teams;
-	if (!gApp.showTabs)
+	if (!gSettings.showTabs)
 		return teams;
 	std::map<std::string, size_t> at;
 	for (Toplevel* window : gToplevels.Windows()) {
@@ -216,6 +211,7 @@ constexpr int kVolumeRow = 20;			// the row of the volume slider in a vertical b
 constexpr int kVolumeWidth = 84;		// and its width in a horizontal one
 constexpr int kSpeakerWidth = 20;		// the speaker at the slider's left end: it mutes
 constexpr int kHorizontalHeight = 26;
+constexpr int kVerticalWidth = 150;
 
 // The width of a line of text in the bar's font.
 double TextWidth(const std::string& text)
@@ -236,8 +232,8 @@ double TextWidth(const std::string& text)
 Layout MakeLayout(int width, int height)
 {
 	Layout layout;
-	const std::vector<TrayItem*> items = gApp.showTray ? gTray.VisibleItems() : std::vector<TrayItem*>();
-	if (IsVertical(gApp.placement)) {
+	const std::vector<TrayItem*> items = gSettings.showTray ? gTray.VisibleItems() : std::vector<TrayItem*>();
+	if (IsVertical(gSettings.placement)) {
 		layout.width = width;
 		layout.header = { 1, 1, width - 2.0, kHeaderHeight };
 		layout.clock = { 1, 1.0 + kHeaderHeight, width - 2.0, kRowHeight };
@@ -245,18 +241,18 @@ Layout MakeLayout(int width, int height)
 		const int columns = std::max(1, (width - 10) / kCell);
 		const int rows = (static_cast<int>(items.size()) + columns - 1) / columns;
 		double top = 1.0 + kHeaderHeight + kRowHeight + 2;
-		if (gApp.showVolume) {
+		if (gSettings.showVolume) {
 			layout.volume = { 5, top, width - 10.0, kVolumeRow - 2.0 };
 			top += kVolumeRow;
 		}
 		for (size_t i = 0; i < items.size(); i++)
 			layout.cells.push_back({ items[i], { 5.0 + (i % columns) * kCell, top + (i / columns) * kCell, kCell, kCell } });
-		double y = 1.0 + kHeaderHeight + kRowHeight + (gApp.showVolume ? 2 + kVolumeRow : 0)
+		double y = 1.0 + kHeaderHeight + kRowHeight + (gSettings.showVolume ? 2 + kVolumeRow : 0)
 			+ (rows > 0 ? 2 + rows * kCell + 2 : 0);
 		// the tabs: a program's tab, and under it, when it is open, the dark box with its windows. At the edge of the screen
 		// they run flush, and are round at the other end.
 		layout.teams = BuildTeams();
-		const bool flushRight = gApp.placement == Placement::TopRight || gApp.placement == Placement::BottomRight;
+		const bool flushRight = gSettings.placement == Placement::TopRight || gSettings.placement == Placement::BottomRight;
 		const double tabX = flushRight ? 3 : 1, tabW = width - 4.0;
 		y += 2;
 		for (size_t t = 0; t < layout.teams.size(); t++) {
@@ -289,7 +285,7 @@ Layout MakeLayout(int width, int height)
 				(kHorizontalHeight - kCell) / 2.0, kCell, kCell } });
 		}
 		double right = layout.cells.empty() ? layout.graph.x : layout.cells[0].cell.x;
-		if (gApp.showVolume) {
+		if (gSettings.showVolume) {
 			layout.volume = { right - 8.0 - kVolumeWidth, (kHorizontalHeight - 18) / 2.0, kVolumeWidth, 18 };
 			right = layout.volume.x;
 		}
@@ -517,7 +513,7 @@ void BarShape(cairo_t* cr, const Rect& r, int flush)
 
 bool FlushRight()
 {
-	return gApp.placement == Placement::TopRight || gApp.placement == Placement::BottomRight;
+	return gSettings.placement == Placement::TopRight || gSettings.placement == Placement::BottomRight;
 }
 
 // The program's tab: a raised bar in the SnakeTracker color that melts into the panel towards its straight end, with a shade
@@ -677,7 +673,7 @@ void Draw(cairo_t* cr, const Layout& layout)
 	const int width = layout.width, height = layout.height;
 	// a corner that is a corner of the screen stays square; any other is round
 	double tl = kRadius, tr = kRadius, br = kRadius, bl = kRadius;
-	switch (gApp.placement) {
+	switch (gSettings.placement) {
 		case Placement::TopLeft: tl = 0; break;
 		case Placement::TopRight: tr = 0; break;
 		case Placement::BottomLeft: bl = 0; break;
@@ -701,7 +697,7 @@ void Draw(cairo_t* cr, const Layout& layout)
 	cairo_set_line_width(cr, 1);
 	cairo_stroke(cr);
 
-	const bool vertical = IsVertical(gApp.placement);
+	const bool vertical = IsVertical(gSettings.placement);
 	if (vertical)
 		DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0,
 			tr > 0 ? tr - 1 : 0, 8, 8);
@@ -709,9 +705,9 @@ void Draw(cairo_t* cr, const Layout& layout)
 		DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0, 8, 8,
 			bl > 0 ? bl - 1 : 0);
 	DrawClock(cr, layout.clock.x, layout.clock.y, layout.clock.w, layout.clock.h);
-	if (gApp.showCpu)
+	if (gSettings.showCpu)
 		DrawCpuGraph(cr, layout.graph.x, layout.graph.y, layout.graph.w, layout.graph.h);
-	if (gApp.showVolume)
+	if (gSettings.showVolume)
 		DrawVolume(cr, layout.volume);
 	DrawTray(cr, layout);
 	for (const BoxRect& box : layout.boxes)
@@ -766,7 +762,7 @@ Layout gLayout;
 void Present()
 {
 	Layout layout = MakeLayout(gApp.width, gApp.height);
-	if (IsVertical(gApp.placement) && layout.height != gApp.height) {
+	if (IsVertical(gSettings.placement) && layout.height != gApp.height) {
 		gApp.height = layout.height;
 		zwlr_layer_surface_v1_set_size(gApp.layerSurface, gApp.width, gApp.height);
 		wl_surface_commit(gApp.surface);
@@ -829,6 +825,8 @@ void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface* surface, wl_fixed_t 
 	if (surface != gApp.surface) {
 		if (MenuOwnsSurface(surface))
 			MenuPointerEnter(surface, wl_fixed_to_double(x), wl_fixed_to_double(y));
+		else if (SettingsOwnsSurface(surface))
+			SettingsPointerEnter(wl_fixed_to_double(x), wl_fixed_to_double(y));
 		return;
 	}
 	gApp.pointerX = wl_fixed_to_double(x);
@@ -839,7 +837,10 @@ void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface* surface, wl_fixed_t 
 void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface* surface)
 {
 	if (surface != gApp.surface) {
-		MenuPointerLeave();
+		if (SettingsOwnsSurface(surface))
+			SettingsPointerLeave();
+		else
+			MenuPointerLeave();
 		if (gWl.pointerSurface == surface)
 			gWl.pointerSurface = nullptr;
 		return;
@@ -859,7 +860,10 @@ double VolumeAt(double x)
 void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 {
 	if (gWl.pointerSurface != gApp.surface) {
-		MenuPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
+		if (SettingsOwnsSurface(gWl.pointerSurface))
+			SettingsPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
+		else
+			MenuPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
 		return;
 	}
 	const double oldX = gApp.pointerX, oldY = gApp.pointerY;
@@ -898,8 +902,8 @@ void OpenLeafMenu()
 	anchor.y = static_cast<int>(gLayout.header.y);
 	anchor.w = static_cast<int>(gLayout.header.w);
 	anchor.h = static_cast<int>(gLayout.header.h);
-	anchor.above = gApp.placement == Placement::Bottom || gApp.placement == Placement::BottomLeft
-		|| gApp.placement == Placement::BottomRight;
+	anchor.above = gSettings.placement == Placement::Bottom || gSettings.placement == Placement::BottomLeft
+		|| gSettings.placement == Placement::BottomRight;
 	OpenMenu(LeafMenuItems(), anchor);
 }
 
@@ -908,11 +912,14 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 	if (serial != 0)
 		gWl.serial = serial;
 	if (gWl.pointerSurface != gApp.surface && gWl.pointerSurface != nullptr) {
-		MenuPointerButton(button, state);
+		if (SettingsOwnsSurface(gWl.pointerSurface))
+			SettingsPointerButton(button, state);
+		else
+			MenuPointerButton(button, state);
 		return;
 	}
 	// the volume: a press on the slider sets the level and drags it; a click on the speaker mutes
-	if (gApp.showVolume && button == BTN_LEFT) {
+	if (gSettings.showVolume && button == BTN_LEFT) {
 		if (state == WL_POINTER_BUTTON_STATE_PRESSED && gLayout.volume.Contains(gApp.pointerX, gApp.pointerY)) {
 			if (gApp.pointerX < gLayout.volume.x + kSpeakerWidth) {
 				gApp.volumeMute = true;
@@ -953,7 +960,7 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 	if (tab >= 0) {
 		const TabRect& hit = gLayout.tabs[tab];
 		const Team& team = gLayout.teams[hit.team];
-		if (IsVertical(gApp.placement) && hit.chevron.Contains(gApp.pointerX, gApp.pointerY)) {
+		if (IsVertical(gSettings.placement) && hit.chevron.Contains(gApp.pointerX, gApp.pointerY)) {
 			gCollapsed[team.key] = !team.collapsed;
 			Redraw();
 		} else if (team.latest != nullptr) {
@@ -974,7 +981,7 @@ void PointerAxis(void*, wl_pointer*, uint32_t, uint32_t axis, wl_fixed_t value)
 			MenuPointerAxis(wl_fixed_to_double(value));
 		return;
 	}
-	if (!gApp.showVolume || axis != WL_POINTER_AXIS_VERTICAL_SCROLL || !gLayout.volume.Contains(gApp.pointerX, gApp.pointerY))
+	if (!gSettings.showVolume || axis != WL_POINTER_AXIS_VERTICAL_SCROLL || !gLayout.volume.Contains(gApp.pointerX, gApp.pointerY))
 		return;
 	const double notches = wl_fixed_to_double(value) / 10.0;
 	gVolume.SetLevel(gVolume.level - static_cast<float>(notches) * 0.02f);
@@ -1074,51 +1081,90 @@ void RegistryRemove(void*, wl_registry*, uint32_t) {}
 
 const wl_registry_listener kRegistryListener = { RegistryGlobal, RegistryRemove };
 
-bool ParsePlacement(const std::string& name, Placement* placement)
-{
-	static const struct { const char* name; Placement placement; } kNames[] = {
-		{"top-left", Placement::TopLeft}, {"top-right", Placement::TopRight},
-		{"bottom-left", Placement::BottomLeft}, {"bottom-right", Placement::BottomRight},
-		{"top", Placement::Top}, {"bottom", Placement::Bottom},
-	};
-	for (const auto& entry : kNames) {
-		if (name == entry.name) {
-			*placement = entry.placement;
-			return true;
-		}
-	}
-	return false;
-}
-
 void Usage(const char* program)
 {
 	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu] [--no-tray] [--no-volume] [--no-tabs]\n", program);
+}
+
+// The bar's place on the screen: which edges it hangs on, its size, and the room it keeps clear. It is told to the compositor,
+// and the bar is drawn again when the compositor has answered.
+void ApplyPlacement()
+{
+	uint32_t anchor = 0;
+	switch (gSettings.placement) {
+		case Placement::TopLeft: anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT; break;
+		case Placement::TopRight: anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT; break;
+		case Placement::BottomLeft: anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT; break;
+		case Placement::BottomRight: anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT; break;
+		case Placement::Top:
+			anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+			break;
+		case Placement::Bottom:
+			anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
+			break;
+	}
+	const bool vertical = IsVertical(gSettings.placement);
+	if (vertical) {
+		gApp.width = kVerticalWidth;
+		gApp.height = 2 + kHeaderHeight + kRowHeight;
+	} else
+		gApp.height = kHorizontalHeight;
+	gApp.shownPlacement = gSettings.placement;
+	zwlr_layer_surface_v1_set_anchor(gApp.layerSurface, anchor);
+	zwlr_layer_surface_v1_set_size(gApp.layerSurface, vertical ? gApp.width : 0, gApp.height);
+	// (a horizontal bar keeps windows clear of itself; a vertical one is not a full edge, so it reserves nothing yet)
+	zwlr_layer_surface_v1_set_exclusive_zone(gApp.layerSurface, vertical ? 0 : gApp.height);
+	zwlr_layer_surface_v1_set_keyboard_interactivity(gApp.layerSurface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+	wl_surface_commit(gApp.surface);
+}
+
+bool gTrayStarted = false, gVolumeStarted = false;
+
+// What the settings window has changed: the place, the parts that are shown, the color.
+void SettingsChanged()
+{
+	if (gSettings.placement != gApp.shownPlacement)
+		ApplyPlacement();
+	if (gSettings.showTray && !gTrayStarted) {
+		gTrayStarted = true;
+		gTray.onChanged = []() { Redraw(); };
+		gTray.Init();
+	}
+	if (gSettings.showVolume && !gVolumeStarted) {
+		gVolumeStarted = true;
+		gVolume.onChanged = []() { Redraw(); };
+		gVolume.Init();
+	}
+	Redraw();
 }
 
 }	// namespace
 
 int main(int argc, char** argv)
 {
+	LoadSettings();
 	for (int i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "--placement") == 0 && i + 1 < argc) {
-			if (!ParsePlacement(argv[++i], &gApp.placement)) {
+			if (!ParsePlacement(argv[++i], &gSettings.placement)) {
 				Usage(argv[0]);
 				return 1;
 			}
 		} else if (strcmp(argv[i], "--no-cpu") == 0) {
-			gApp.showCpu = false;
+			gSettings.showCpu = false;
 		} else if (strcmp(argv[i], "--no-tabs") == 0) {
-			gApp.showTabs = false;
+			gSettings.showTabs = false;
 		} else if (strcmp(argv[i], "--no-volume") == 0) {
-			gApp.showVolume = false;
+			gSettings.showVolume = false;
 		} else if (strcmp(argv[i], "--no-tray") == 0) {
-			gApp.showTray = false;
+			gSettings.showTray = false;
 		} else if (strcmp(argv[i], "--click-first-tray-icon") == 0) {
 			gApp.clickFirst = true;		// for testing: a left and a right click on the first icon, after a few seconds
 		} else if (strcmp(argv[i], "--debug-click") == 0 && i + 1 < argc) {
 			gApp.debugClick = argv[++i];		// for testing: tab:N, chevron:N or row:N, clicked a few seconds after the start
 		} else if (strcmp(argv[i], "--debug-submenus") == 0 && i + 1 < argc) {
 			gApp.debugSubmenus = argv[++i];		// for testing, after "--debug-click header": "2,5" opens row 2, then row 5 of that
+		} else if (strcmp(argv[i], "--debug-settings") == 0 && i + 1 < argc) {
+			gApp.debugSettings = argv[++i];		// for testing: opens the settings window, then clicks "x,y;x,y;..." in it
 		} else if (strcmp(argv[i], "--debug") == 0) {
 			gDebugEnabled = true;
 		} else if (strcmp(argv[i], "--version") == 0) {
@@ -1164,37 +1210,19 @@ int main(int argc, char** argv)
 	gWl.layerSurface = gApp.layerSurface;
 	zwlr_layer_surface_v1_add_listener(gApp.layerSurface, &kLayerListener, nullptr);
 
-	uint32_t anchor = 0;
-	switch (gApp.placement) {
-		case Placement::TopLeft: anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT; break;
-		case Placement::TopRight: anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT; break;
-		case Placement::BottomLeft: anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT; break;
-		case Placement::BottomRight: anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT; break;
-		case Placement::Top:
-			anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
-			break;
-		case Placement::Bottom:
-			anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT;
-			break;
-	}
-	const bool vertical = IsVertical(gApp.placement);
-	if (!vertical)
-		gApp.height = 26;
-	zwlr_layer_surface_v1_set_anchor(gApp.layerSurface, anchor);
-	zwlr_layer_surface_v1_set_size(gApp.layerSurface, vertical ? gApp.width : 0, gApp.height);
-	// (a horizontal bar keeps windows clear of itself; a vertical one is not a full edge, so it reserves nothing yet)
-	zwlr_layer_surface_v1_set_exclusive_zone(gApp.layerSurface, vertical ? 0 : gApp.height);
-	zwlr_layer_surface_v1_set_keyboard_interactivity(gApp.layerSurface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
-	wl_surface_commit(gApp.surface);
+	ApplyPlacement();
 
 	// the clock changes on the minute, and the CPU graph moves twice a second
 	gApp.loop = g_main_loop_new(nullptr, FALSE);
 	AttachWaylandSource(gApp.display, []() { g_main_loop_quit(gApp.loop); });
-	if (gApp.showTray) {
+	gOnSettingsChanged = SettingsChanged;
+	if (gSettings.showTray) {
+		gTrayStarted = true;
 		gTray.onChanged = []() { Redraw(); };
 		gTray.Init();
 	}
-	if (gApp.showVolume) {
+	if (gSettings.showVolume) {
+		gVolumeStarted = true;
 		gVolume.onChanged = []() { Redraw(); };
 		gVolume.Init();
 	}
@@ -1202,7 +1230,7 @@ int main(int argc, char** argv)
 	static int shownMinute = -1;
 	g_timeout_add(kRefreshMs, [](gpointer) -> gboolean {
 		const int minute = static_cast<int>(time(nullptr) / 60);
-		if (gApp.showCpu) {
+		if (gSettings.showCpu) {
 			gApp.cpu.Sample();
 			Redraw();
 		} else if (minute != shownMinute)
@@ -1246,6 +1274,25 @@ int main(int argc, char** argv)
 					break;
 				at = comma + 1;
 			}
+		});
+	}
+	if (!gApp.debugSettings.empty()) {
+		RunAfter(4000, []() {
+			OpenSettingsWindow();
+			static size_t at = 0;
+			g_timeout_add(1200, [](gpointer) -> gboolean {
+				const std::string& list = gApp.debugSettings;
+				if (at >= list.size())
+					return G_SOURCE_REMOVE;
+				const double x = atof(list.c_str() + at);
+				const size_t comma = list.find(',', at);
+				const double y = comma == std::string::npos ? 0 : atof(list.c_str() + comma + 1);
+				const size_t semicolon = list.find(';', at);
+				at = semicolon == std::string::npos ? list.size() : semicolon + 1;
+				SettingsPointerEnter(x, y);
+				SettingsPointerButton(BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+				return G_SOURCE_CONTINUE;
+			}, nullptr);
 		});
 	}
 	if (gApp.clickFirst) {

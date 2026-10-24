@@ -12,6 +12,7 @@
 #include <map>
 
 #include "apps.h"
+#include "settings.h"
 #include "util.h"
 
 namespace {
@@ -124,6 +125,13 @@ std::vector<MenuItem> LeafMenuItems()
 	applications.iconName = "applications-all";
 	applications.submenu = ApplicationItems;
 	items.push_back(applications);
+	items.push_back(MenuItem::Separator());
+
+	MenuItem settings;
+	settings.label = "Settings...";
+	settings.iconName = "preferences-system";
+	settings.action = []() { OpenSettingsWindow(); };
+	items.push_back(settings);
 	items.push_back(MenuItem::Separator());
 
 	MenuItem power;

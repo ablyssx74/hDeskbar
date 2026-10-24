@@ -7,8 +7,8 @@ ProcessController, and a menu. It is drawn with cairo on a layer-shell surface, 
 It is a sibling of [hDesktop](https://github.com/ablyssx74/hDesktop) (the dock) and uses the same kind of backend: the
 compositor's window management protocols, StatusNotifierItem for the tray, PulseAudio for the volume.
 
-Status: **just started** (v0.7.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
-block) and its menu, the CPU graph, the clock, the volume slider, the system tray and the program tabs. Settings are not there yet.
+Status: **just started** (v0.8.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
+block) and its menu, the CPU graph, the clock, the volume slider, the system tray, the program tabs and a settings window.
 
 ## Places
 - Vertical bars at the top left, top right, bottom left and bottom right of the screen.
@@ -17,10 +17,13 @@ block) and its menu, the CPU graph, the clock, the volume slider, the system tra
 A corner of the bar that is a corner of the screen stays square; every other corner is round, and the bar has the Deskbar's
 one pixel outline all round.
 
-    hdeskbar --placement top-left|top-right|bottom-left|bottom-right|top|bottom [--no-cpu] [--no-tray] [--no-volume] [--no-tabs] [--debug]
+    hdeskbar [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu] [--no-tray] [--no-volume] [--no-tabs] [--debug]
 
-`--no-cpu` leaves the CPU graph out, `--no-tray` the tray, `--no-volume` the volume slider and `--no-tabs` the program tabs (settings
-will do that later).
+The flags are for one run; the settings window keeps its choices in `~/.config/hdeskbar/hdeskbar.conf`.
+
+**Settings.** The menu of the header has Settings... : the program tabs, the system tray, the CPU graph and the volume slider can each
+be shown or left out, the bar can be put in any of the six places, and the SnakeTracker color can be chosen from eight (the panel
+is a light tint of it). A choice takes effect at once, even the place: the bar moves.
 
 **The menu.** A click on the header opens it: About, Applications (by category: Sound & Video, Development, Games, Graphics, Internet,
 Office, Science, Settings, System, Accessories, Other), Power (lock, log out, restart, shut down: the first two through `loginctl`, the
@@ -57,7 +60,7 @@ D-Bus (dbusmenu) will be drawn by hDeskbar itself when the menu code is in.
 7. **The menu** (done in a first form): the header opens a menu with the applications by category, power actions and quit.
    Still to come: the snake trail joining the submenus, the tray's own (dbusmenu) menus, the CPU graph's menu, the window list of a
    program in a horizontal bar, and tooltips.
-8. **Settings**, and a PKGBUILD.
+8. **Settings** (done), and a PKGBUILD.
 
 The Haiku Deskbar's four small corner layouts are not planned.
 
