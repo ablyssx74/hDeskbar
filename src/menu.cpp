@@ -40,6 +40,7 @@ struct Popup {
 	int scroll = 0;
 	int hover = -1;
 	bool hasIcons = false, hasChecks = false;
+	int checkRoom = 0;			// a column of its own for the marks (none: they are in the icons' column)
 	bool configured = false;
 	Popup* parent = nullptr;
 	int parentRow = -1;
@@ -130,7 +131,12 @@ void LayOut(Popup* p)
 		if (item.submenu && !item.noArrow)
 			arrows = true;
 	}
-	const double left = (p->hasIcons ? 34 : 12) + (p->hasChecks ? 16 : 0);
+	// a menu with icons has the marks of its checked items where the icons are, unless an item has both
+	bool both = false;
+	for (const MenuItem& item : p->items)
+		both |= item.check != kCheckNone && (!item.iconName.empty() || item.icon);
+	p->checkRoom = (p->hasChecks && (!p->hasIcons || both)) ? 16 : 0;
+	const double left = (p->hasIcons ? 34 : 12) + p->checkRoom;
 	if (memory) {
 		p->numbersWidth = 2 * MeasureLabel("1023.99 MiB") + 20;
 		p->nameColumn = std::clamp(widest + 16, 120.0, 280.0);
@@ -139,10 +145,10 @@ void LayOut(Popup* p)
 		p->nameColumn = std::clamp(widest + 16, 120.0, 280.0);
 		p->width = static_cast<int>(std::ceil(left + p->nameColumn + kValueColumn + kBarWidth + 16 + (arrows ? 14 : 0)));
 	} else {
-		p->width = static_cast<int>(std::ceil(widest)) + 8 + (p->hasIcons ? 24 : 4) + (p->hasChecks ? 16 : 0) + 26;
+		p->width = static_cast<int>(std::ceil(widest)) + 8 + (p->hasIcons ? 24 : 4) + p->checkRoom + 26;
 		p->width = std::clamp(p->width, 150, 420);
 	}
-	p->lead = (p->mirror && arrows) ? 18 : 0;
+	p->lead = (p->mirror && arrows) ? 14 : 0;
 	p->width += p->lead;
 	const int most = (gWl.screenHeight > 0 ? gWl.screenHeight : 700) - 40;
 	p->height = std::min(p->content + 2 * kPad, std::max(most, 100));
@@ -245,8 +251,9 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 		bottom = std::min(bottom, h);
 		if (bottom > top) {
 			const bool extTop = top < pTop - 0.5f, extBottom = bottom > pBottom + 0.5f;
-			const float outerT = extTop ? kR : 0.0f, innerT = extTop ? 0.0f : kR;
-			const float outerB = extBottom ? kR : 0.0f, innerB = extBottom ? 0.0f : kR;
+			// (a bar that starts at the edge of the menu, from the Deskbar, is straight there)
+			const float outerT = extTop ? kR : 0.0f, innerT = (extTop || (fromBar && top <= 0.5f)) ? 0.0f : kR;
+			const float outerB = extBottom ? kR : 0.0f, innerB = (extBottom || (fromBar && bottom >= h - 0.5f)) ? 0.0f : kR;
 			if (parentOnLeft)
 				pieces.push_back({ 0, top, kBarW, bottom - top, outerT, innerT, innerB, outerB });
 			else
@@ -258,9 +265,9 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 			if (hasOwn && ownBottom > ownTop) {
 				const float ex = parentOnLeft ? kBarW : w - kBarW;
 				const int dx = parentOnLeft ? 1 : -1;
-				if (top < ownTop - 0.5f)
+				if (top < ownTop - 0.5f && !(fromBar && ownTop - top < kR))
 					fillets.push_back({ ex, ownTop, dx, -1 });
-				if (bottom > ownBottom + 0.5f)
+				if (bottom > ownBottom + 0.5f && !(fromBar && bottom - ownBottom < kR))
 					fillets.push_back({ ex, ownBottom, dx, 1 });
 			}
 		}
@@ -406,10 +413,20 @@ void Paint(Popup* p)
 			}
 			const bool lit = litRow[i] != 0;
 			const double alpha = item.enabled ? 1.0 : 0.45;
-			const double checkWidth = p->hasChecks ? 16 : 0;
+			const double checkWidth = p->checkRoom, markX = p->checkRoom ? 0 : 6;
+			const bool on = item.check == kCheckOn || item.check == kRadioOn;
 			if (item.check != kCheckNone) {
-				// a mark for a checked item, a dot for the chosen one of a set
-				const bool on = item.check == kCheckOn || item.check == kRadioOn;
+				// a mark for a checked item, a dot for the chosen one of a set; an unchecked item that shares the icons' column has the
+				// place of the mark shown as a box
+				if (!on && item.check == kCheckOff && !p->checkRoom) {
+					RoundedRectPath(cr, 12.5, y + kRow / 2.0 - 5.5, 11, 11, 2.5, 2.5, 2.5, 2.5);
+					if (lit)
+						cairo_set_source_rgba(cr, 1, 1, 1, 0.8);
+					else
+						cairo_set_source_rgba(cr, 0.10, 0.10, 0.16, 0.45 * alpha);
+					cairo_set_line_width(cr, 1);
+					cairo_stroke(cr);
+				}
 				if (on) {
 					if (lit)
 						cairo_set_source_rgb(cr, 1, 1, 1);
@@ -417,13 +434,13 @@ void Paint(Popup* p)
 						cairo_set_source_rgba(cr, 0.10, 0.10, 0.16, alpha);
 					if (item.check == kCheckOn) {
 						cairo_set_line_width(cr, 1.8);
-						cairo_move_to(cr, 8, y + kRow / 2.0);
-						cairo_line_to(cr, 11, y + kRow / 2.0 + 3);
-						cairo_line_to(cr, 16, y + kRow / 2.0 - 4);
+						cairo_move_to(cr, 8 + markX, y + kRow / 2.0);
+						cairo_line_to(cr, 11 + markX, y + kRow / 2.0 + 3);
+						cairo_line_to(cr, 16 + markX, y + kRow / 2.0 - 4);
 						cairo_stroke(cr);
 					} else {
 						cairo_new_path(cr);
-						cairo_arc(cr, 12, y + kRow / 2.0, 3, 0, 2 * M_PI);
+						cairo_arc(cr, 12 + markX, y + kRow / 2.0, 3, 0, 2 * M_PI);
 						cairo_fill(cr);
 					}
 				}
@@ -532,7 +549,7 @@ void Paint(Popup* p)
 
 			const bool underTrail = bar.valid && bar.onRight == !p->mirror && y + kRow / 2.0 >= bar.top && y + kRow / 2.0 <= bar.bottom;
 			if (item.submenu && !item.noArrow && !underTrail) {
-				const double cx = p->mirror ? 12.0 - p->lead : rw - 14, cy = y + kRow / 2.0, d = p->mirror ? -2 : 2;
+				const double cx = p->mirror ? 9.0 - p->lead : rw - 14, cy = y + kRow / 2.0, d = p->mirror ? -2 : 2;
 				cairo_set_line_width(cr, 1.6);
 				cairo_move_to(cr, cx - d, cy - 3.5);
 				cairo_line_to(cr, cx + d, cy);
