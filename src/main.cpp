@@ -11,11 +11,14 @@
 
 #include <cairo/cairo.h>
 #include <pango/pangocairo.h>
+#include <poll.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 #include <wayland-client.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -25,6 +28,7 @@
 #define namespace namespace_
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #undef namespace
+#include "icon.h"
 #include "xdg-shell-client-protocol.h"
 
 namespace {
@@ -37,6 +41,15 @@ constexpr Color kPanel = {200 / 255.0, 203 / 255.0, 235 / 255.0};	// the lavende
 constexpr Color kOutline = {20 / 255.0, 22 / 255.0, 30 / 255.0};	// the line round the bar
 constexpr Color kAccent = {70 / 255.0, 110 / 255.0, 200 / 255.0};	// the SnakeTracker color
 constexpr double kRadius = 7;
+constexpr int kHeaderHeight = 24;		// the block with the icon (a vertical bar)
+constexpr int kRowHeight = 24;			// the row of the clock, and later the CPU graph and the tray
+constexpr int kHeaderWidth = 48;		// the same block in a horizontal bar
+constexpr int kIconSize = 20;
+
+Color Mix(const Color& a, const Color& b, double t)
+{
+	return { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t };
+}
 
 struct App {
 	wl_display* display = nullptr;
@@ -48,7 +61,7 @@ struct App {
 	zwlr_layer_surface_v1* layerSurface = nullptr;
 
 	Placement placement = Placement::TopRight;
-	int width = 150, height = 110;		// what the bar asks for (a horizontal bar's width is the screen's)
+	int width = 150, height = 2 + kHeaderHeight + kRowHeight;		// what the bar asks for (a horizontal bar's width is the screen's)
 	bool running = true;
 	bool configured = false;
 };
@@ -81,6 +94,57 @@ void RoundedRectPath(cairo_t* cr, double x, double y, double w, double h, double
 	cairo_close_path(cr);
 }
 
+// The block at the top of the bar (the Deskbar's leaf): a raised bar in the SnakeTracker color, with the icon in its middle.
+void DrawHeader(cairo_t* cr, double x, double y, double w, double h, double tl, double tr, double br, double bl)
+{
+	// the soft shade under the block
+	for (int i = 3; i >= 1; i--) {
+		RoundedRectPath(cr, x, y + i, w, h, tl, tr, br, bl);
+		cairo_set_source_rgba(cr, 0, 0, 0, 0.07);
+		cairo_fill(cr);
+	}
+
+	cairo_pattern_t* gradient = cairo_pattern_create_linear(0, y, 0, y + h);
+	const Color light = Mix(kAccent, {1, 1, 1}, 0.30), dark = Mix(kAccent, {0, 0, 0}, 0.22);
+	cairo_pattern_add_color_stop_rgb(gradient, 0, light.r, light.g, light.b);
+	cairo_pattern_add_color_stop_rgb(gradient, 0.55, kAccent.r, kAccent.g, kAccent.b);
+	cairo_pattern_add_color_stop_rgb(gradient, 1, dark.r, dark.g, dark.b);
+	RoundedRectPath(cr, x, y, w, h, tl, tr, br, bl);
+	cairo_set_source(cr, gradient);
+	cairo_fill(cr);
+	cairo_pattern_destroy(gradient);
+
+	// a fine light line along the top edge
+	RoundedRectPath(cr, x + 0.5, y + 0.5, w - 1, h - 1, std::max(0.0, tl - 0.5), std::max(0.0, tr - 0.5),
+		std::max(0.0, br - 0.5), std::max(0.0, bl - 0.5));
+	cairo_set_source_rgba(cr, 1, 1, 1, 0.25);
+	cairo_set_line_width(cr, 1);
+	cairo_stroke(cr);
+
+	DrawSnakeTrackerIcon(cr, x + std::floor((w - kIconSize) / 2), y + std::floor((h - kIconSize) / 2), kIconSize);
+}
+
+void DrawClock(cairo_t* cr, double x, double y, double w, double h)
+{
+	time_t now = time(nullptr);
+	struct tm local;
+	localtime_r(&now, &local);
+	char text[32];
+	strftime(text, sizeof(text), "%-I:%M %p", &local);
+
+	PangoLayout* layout = pango_cairo_create_layout(cr);
+	PangoFontDescription* font = pango_font_description_from_string("Sans 9");
+	pango_layout_set_font_description(layout, font);
+	pango_layout_set_text(layout, text, -1);
+	int textWidth = 0, textHeight = 0;
+	pango_layout_get_pixel_size(layout, &textWidth, &textHeight);
+	cairo_set_source_rgb(cr, kOutline.r, kOutline.g, kOutline.b);
+	cairo_move_to(cr, x + w - textWidth - 8, y + (h - textHeight) / 2);
+	pango_cairo_show_layout(cr, layout);
+	pango_font_description_free(font);
+	g_object_unref(layout);
+}
+
 void Draw(cairo_t* cr, int width, int height)
 {
 	// a corner that is a corner of the screen stays square; any other is round
@@ -109,27 +173,24 @@ void Draw(cairo_t* cr, int width, int height)
 	cairo_set_line_width(cr, 1);
 	cairo_stroke(cr);
 
-	// the header, for now: a block in the SnakeTracker color with the name
-	const double headerHeight = IsVertical(gApp.placement) ? 24 : height - 4;
-	const double headerWidth = IsVertical(gApp.placement) ? width - 2 : 90;
-	cairo_set_source_rgb(cr, kAccent.r, kAccent.g, kAccent.b);
-	RoundedRectPath(cr, 1, 1, headerWidth, headerHeight, tl > 0 ? tl - 1 : 0, 0, 0, 0);
-	cairo_fill(cr);
-
-	PangoLayout* layout = pango_cairo_create_layout(cr);
-	PangoFontDescription* font = pango_font_description_from_string("Sans 9");
-	pango_layout_set_font_description(layout, font);
-	pango_layout_set_text(layout, "hDeskbar " APP_VERSION, -1);
-	int textWidth = 0, textHeight = 0;
-	pango_layout_get_pixel_size(layout, &textWidth, &textHeight);
-	cairo_set_source_rgb(cr, 1, 1, 1);
-	cairo_move_to(cr, 1 + (headerWidth - textWidth) / 2, 1 + (headerHeight - textHeight) / 2);
-	pango_cairo_show_layout(cr, layout);
-	pango_font_description_free(font);
-	g_object_unref(layout);
+	const bool vertical = IsVertical(gApp.placement);
+	if (vertical) {
+		DrawHeader(cr, 1, 1, width - 2, kHeaderHeight, tl > 0 ? tl - 1 : 0, tr > 0 ? tr - 1 : 0, 8, 8);
+		DrawClock(cr, 1, 1 + kHeaderHeight, width - 2, kRowHeight);
+	} else {
+		DrawHeader(cr, 1, 1, kHeaderWidth, height - 2, tl > 0 ? tl - 1 : 0, 8, 8, bl > 0 ? bl - 1 : 0);
+		DrawClock(cr, width - 110 - 1, 1, 110, height - 2);
+	}
 }
 
 // ---- the buffer ----
+
+void BufferRelease(void*, wl_buffer* buffer)
+{
+	wl_buffer_destroy(buffer);
+}
+
+const wl_buffer_listener kBufferListener = { BufferRelease };
 
 wl_buffer* MakeBuffer(int width, int height)
 {
@@ -154,6 +215,7 @@ wl_buffer* MakeBuffer(int width, int height)
 	wl_shm_pool* pool = wl_shm_create_pool(gApp.shm, fd, size);
 	wl_buffer* buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride, WL_SHM_FORMAT_ARGB8888);
 	wl_shm_pool_destroy(pool);
+	wl_buffer_add_listener(buffer, &kBufferListener, nullptr);
 	munmap(data, size);
 	close(fd);
 	return buffer;
@@ -287,7 +349,31 @@ int main(int argc, char** argv)
 	zwlr_layer_surface_v1_set_keyboard_interactivity(gApp.layerSurface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
 	wl_surface_commit(gApp.surface);
 
-	while (gApp.running && wl_display_dispatch(gApp.display) != -1) {
+	// the clock changes on the minute: wait for the compositor, or for the next minute, whichever comes first
+	int shown = -1;
+	while (gApp.running) {
+		while (wl_display_prepare_read(gApp.display) != 0)
+			wl_display_dispatch_pending(gApp.display);
+		if (wl_display_flush(gApp.display) < 0 && errno != EAGAIN) {
+			wl_display_cancel_read(gApp.display);
+			break;
+		}
+		time_t now = time(nullptr);
+		const int toNextMinute = static_cast<int>((60 - now % 60) * 1000 + 50);
+		pollfd descriptor = { wl_display_get_fd(gApp.display), POLLIN, 0 };
+		poll(&descriptor, 1, toNextMinute);
+		if (descriptor.revents & POLLIN) {
+			if (wl_display_read_events(gApp.display) < 0)
+				break;
+		} else
+			wl_display_cancel_read(gApp.display);
+		wl_display_dispatch_pending(gApp.display);
+
+		const int minute = static_cast<int>(time(nullptr) / 60);
+		if (gApp.configured && minute != shown) {
+			shown = minute;
+			Present(gApp.width, gApp.height);
+		}
 	}
 	return 0;
 }
