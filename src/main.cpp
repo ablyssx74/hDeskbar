@@ -1078,6 +1078,7 @@ void OpenMenuAt(std::vector<MenuItem> items, const Rect& r)
 	anchor.w = static_cast<int>(r.w);
 	anchor.h = static_cast<int>(r.h);
 	anchor.above = BarIsAtBottom();
+	anchor.mirror = FlushRight();
 	OpenMenu(std::move(items), anchor);
 }
 
@@ -1150,6 +1151,7 @@ void OpenLeafMenu()
 	anchor.h = static_cast<int>(gLayout.header.h);
 	anchor.above = BarIsAtBottom();
 	anchor.fromHeader = true;
+	anchor.mirror = FlushRight();
 	if (IsVertical(gSettings.placement))
 		anchor.side = FlushRight() ? -1 : 1;
 	OpenMenu(LeafMenuItems(), anchor);

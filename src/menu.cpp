@@ -48,6 +48,8 @@ struct Popup {
 	bool barAbove = false;		// the bar this menu starts from is below it: the trail starts at the bottom
 	int trailSide = 0;			// the edge of this menu that faces its parent: -1 the left one, 1 the right one
 	double trailRowY = 0;		// where the parent's row is, in this menu's pixels (the trail's bar starts there)
+	bool mirror = false;			// opens to the left, chevrons on the left
+	int lead = 0;				// the room of those chevrons
 	int popupX = 0, popupY = 0;	// where the compositor put it, in its parent's pixels
 	wl_surface* surface = nullptr;
 	xdg_surface* xdgSurface = nullptr;
@@ -140,6 +142,8 @@ void LayOut(Popup* p)
 		p->width = static_cast<int>(std::ceil(widest)) + 8 + (p->hasIcons ? 24 : 4) + (p->hasChecks ? 16 : 0) + 26;
 		p->width = std::clamp(p->width, 150, 420);
 	}
+	p->lead = (p->mirror && arrows) ? 18 : 0;
+	p->width += p->lead;
 	const int most = (gWl.screenHeight > 0 ? gWl.screenHeight : 700) - 40;
 	p->height = std::min(p->content + 2 * kPad, std::max(most, 100));
 }
@@ -383,6 +387,9 @@ void Paint(Popup* p)
 		cairo_save(cr);
 		cairo_rectangle(cr, 0, 0, w, h);
 		cairo_clip(cr);
+		cairo_save(cr);
+		cairo_translate(cr, p->lead, 0);		// (the rows have moved over for the chevrons on the left)
+		const double rw = w - p->lead;
 		for (size_t i = 0; i < p->items.size(); i++) {
 			const MenuItem& item = p->items[i];
 			const double y = kPad + p->tops[i] - p->scroll;
@@ -390,10 +397,10 @@ void Paint(Popup* p)
 				continue;
 			if (item.separator) {
 				cairo_set_source_rgba(cr, 0, 0, 0, 0.20);
-				cairo_rectangle(cr, 8, y + 3, w - 16, 1);
+				cairo_rectangle(cr, 8, y + 3, rw - 16, 1);
 				cairo_fill(cr);
 				cairo_set_source_rgba(cr, 1, 1, 1, 0.55);
-				cairo_rectangle(cr, 8, y + 4, w - 16, 1);
+				cairo_rectangle(cr, 8, y + 4, rw - 16, 1);
 				cairo_fill(cr);
 				continue;
 			}
@@ -520,16 +527,16 @@ void Paint(Popup* p)
 				cairo_rectangle(cr, barX + 0.5, barY + 0.5, kBarWidth - 1, barH - 1);
 				cairo_stroke(cr);
 			} else {
-				text(item.label, textX, w - textX - 20);
+				text(item.label, textX, rw - textX - 20);
 			}
 
-			const bool underTrail = bar.valid && bar.onRight && y + kRow / 2.0 >= bar.top && y + kRow / 2.0 <= bar.bottom;
+			const bool underTrail = bar.valid && bar.onRight == !p->mirror && y + kRow / 2.0 >= bar.top && y + kRow / 2.0 <= bar.bottom;
 			if (item.submenu && !item.noArrow && !underTrail) {
-				const double cx = w - 14, cy = y + kRow / 2.0;
+				const double cx = p->mirror ? 12.0 - p->lead : rw - 14, cy = y + kRow / 2.0, d = p->mirror ? -2 : 2;
 				cairo_set_line_width(cr, 1.6);
-				cairo_move_to(cr, cx - 2, cy - 3.5);
-				cairo_line_to(cr, cx + 2, cy);
-				cairo_line_to(cr, cx - 2, cy + 3.5);
+				cairo_move_to(cr, cx - d, cy - 3.5);
+				cairo_line_to(cr, cx + d, cy);
+				cairo_line_to(cr, cx - d, cy + 3.5);
 				if (lit)
 					cairo_set_source_rgb(cr, 1, 1, 1);
 				else
@@ -537,6 +544,7 @@ void Paint(Popup* p)
 				cairo_stroke(cr);
 			}
 		}
+		cairo_restore(cr);
 		// the arrows of a long menu that scrolls
 		if (p->content + 2 * kPad > p->height) {
 			cairo_set_source_rgba(cr, 0.10, 0.10, 0.16, 0.55);
@@ -700,6 +708,7 @@ void OpenSubmenu(Popup* parent, int row)
 	if (child->items.empty())
 		return;
 	child->parent = parent;
+	child->mirror = parent->mirror;
 	child->parentRow = row;
 	if (item.liveMs > 0) {
 		child->source = item.submenu;
@@ -711,8 +720,9 @@ void OpenSubmenu(Popup* parent, int row)
 	if (raw->liveMs > 0)
 		raw->liveTimer = g_timeout_add(raw->liveMs, LiveTick, raw);
 	const int y = kPad + parent->tops[row] - parent->scroll;
-	Create(raw, parent, kOverlap, y, parent->width - 2 * kOverlap, kRow, XDG_POSITIONER_ANCHOR_TOP_RIGHT,
-		XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, 0, -kPad,
+	Create(raw, parent, kOverlap, y, parent->width - 2 * kOverlap, kRow,
+		parent->mirror ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_TOP_RIGHT,
+		parent->mirror ? XDG_POSITIONER_GRAVITY_BOTTOM_LEFT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, 0, -kPad,
 		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y
 			| XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y);
 }
@@ -727,6 +737,7 @@ void OpenMenu(std::vector<MenuItem> items, const MenuAnchor& anchor)
 		return;
 	auto root = std::make_unique<Popup>();
 	root->items = std::move(items);
+	root->mirror = anchor.mirror;
 	LayOut(root.get());
 	Popup* raw = root.get();
 	gStack.push_back(std::move(root));
@@ -744,9 +755,12 @@ void OpenMenu(std::vector<MenuItem> items, const MenuAnchor& anchor)
 		raw->trailSide = -1;		// the trail runs down the edge at the header's side, from the bar
 		raw->barAbove = anchor.above;
 	}
+	// (a mirrored menu hangs from the right end of the rectangle and goes to the left)
 	Create(raw, nullptr, anchor.x, anchor.y, anchor.w, anchor.h,
-		anchor.above ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_BOTTOM_LEFT,
-		anchor.above ? XDG_POSITIONER_GRAVITY_TOP_RIGHT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, 0,
+		anchor.mirror ? (anchor.above ? XDG_POSITIONER_ANCHOR_TOP_RIGHT : XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT)
+			: (anchor.above ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_BOTTOM_LEFT),
+		anchor.mirror ? (anchor.above ? XDG_POSITIONER_GRAVITY_TOP_LEFT : XDG_POSITIONER_GRAVITY_BOTTOM_LEFT)
+			: (anchor.above ? XDG_POSITIONER_GRAVITY_TOP_RIGHT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT), 0,
 		anchor.fromHeader ? (anchor.above ? 5 : -5) : 0,		// (over the bar's edge)
 		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y
 			| XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y);
