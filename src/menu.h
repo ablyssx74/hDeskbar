@@ -42,6 +42,7 @@ struct MenuItem {
 struct MenuAnchor {
 	int x = 0, y = 0, w = 1, h = 1;
 	bool above = false;		// the menu opens upward from the rectangle (a bar at the bottom of the screen)
+	int side = 0;			// -1: the menu opens beside the rectangle, to its left; 1: to its right (a vertical bar); 0: below it
 };
 
 void OpenMenu(std::vector<MenuItem> items, const MenuAnchor& anchor);

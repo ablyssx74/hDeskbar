@@ -7,7 +7,7 @@ ProcessController, and a menu. It is drawn with cairo on a layer-shell surface, 
 It is a sibling of [hDesktop](https://github.com/ablyssx74/hDesktop) (the dock) and uses the same kind of backend: the
 compositor's window management protocols, StatusNotifierItem for the tray, PulseAudio for the volume.
 
-Status: **just started** (v0.11.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
+Status: **just started** (v0.12.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
 block) and its menu, the CPU graph, the clock, the volume icon, the system tray (with the programs' own menus), the program tabs and a settings window.
 
 ## Places
@@ -25,10 +25,14 @@ The flags are for one run; the settings window keeps its choices in `~/.config/h
 be shown or left out ("Volume icon" among them), the bar can be put in any of the six places, and the SnakeTracker color can be chosen from eight (the panel
 is a light tint of it). A choice takes effect at once, even the place: the bar moves.
 
-**The menu.** A click on the header opens it: About, Applications (by category: Sound & Video, Development, Games, Graphics, Internet,
-Office, Science, Settings, System, Accessories, Other), Power (lock, log out, restart, shut down: the first two through `loginctl`, the
-others through `systemctl`) and Quit. It opens downward from a bar at the top of the screen and upward from one at the bottom; a
-long list scrolls with the wheel; a press outside closes it. Each menu is an `xdg_popup`, so the compositor puts it where it fits.
+**The menu.** A click on the header opens the menu, laid out like the Haiku Deskbar's leaf menu, and beside a bar at the side of the
+screen (to the left of one on the right, to the right of one on the left; below or above a bar along an edge): About, Find (the
+launcher of your desktop: KRunner, rofi, wofi, fuzzel...), Show tray icons (a check mark), Mount (the volumes: choosing one opens it, and
+mounts it first when it is not mounted), Deskbar preferences, Quit; Shutdown (Lock Screen, Log Out, Restart, Shut Down: the first two
+through `loginctl`, the others through `systemctl`); Recent documents and Recent folders (the GTK list and KDE's), Recent
+applications (the ones this menu started); and Applications (by category) and Preferences (the settings programs). The row of
+a menu that has a submenu open stays lit and runs on to the submenu, and a strip along the submenu's edge runs from its top to
+that row: the snake trail. A long list scrolls with the wheel; a press outside closes the menus. Each menu is an `xdg_popup`.
 
 **Tooltips.** Rest the pointer on something for half a second and a dark capsule says what it is: the CPU load on the graph, the date
 on the clock, the level on the volume icon, the name of a tray icon, a program's name (and how many windows it has, or the title of its
@@ -91,7 +95,7 @@ own (ContextMenu).
    SnakeTracker 1.0.51 (straight at the screen's edge, round at the other end).
 6. **The horizontal bars** (done): the tabs side by side, and the list of a program's windows as a menu under its tab.
 7. **The menu** (done in a first form): the header opens a menu with the applications by category, power actions and quit.
-   Still to come: the snake trail joining the submenus, and the CPU graph's menu.
+   Still to come: the CPU graph's menu.
 8. **Settings** (done), and a PKGBUILD.
 
 The Haiku Deskbar's four small corner layouts are not planned.

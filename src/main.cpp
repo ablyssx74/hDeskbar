@@ -1098,10 +1098,20 @@ void ClickVolume(uint32_t button)
 	}
 }
 
-// The menu that the header opens.
+// The menu that the header opens: beside a bar at the side of the screen (to the left of one on the right, and the other way
+// round), below or above a bar along an edge.
 void OpenLeafMenu()
 {
-	OpenMenuAt(LeafMenuItems(), gLayout.header);
+	CancelTooltip();
+	MenuAnchor anchor;
+	anchor.x = static_cast<int>(gLayout.header.x);
+	anchor.y = static_cast<int>(gLayout.header.y);
+	anchor.w = static_cast<int>(gLayout.header.w);
+	anchor.h = static_cast<int>(gLayout.header.h);
+	anchor.above = BarIsAtBottom();
+	if (IsVertical(gSettings.placement))
+		anchor.side = FlushRight() ? -1 : 1;
+	OpenMenu(LeafMenuItems(), anchor);
 }
 
 void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t button, uint32_t state)

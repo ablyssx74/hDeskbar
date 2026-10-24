@@ -37,6 +37,11 @@ struct Popup {
 	bool configured = false;
 	Popup* parent = nullptr;
 	int parentRow = -1;
+	int openRow = -1;			// the row whose submenu is open: it stays lit
+	int childSide = 0;			// where the open submenu is: 1 to the right of this menu, -1 to the left
+	int trailSide = 0;			// the edge of this menu that faces its parent: -1 the left one, 1 the right one
+	double trailRowY = 0;		// where the parent's row is, in this menu's pixels (the trail runs from the top to it)
+	int popupX = 0, popupY = 0;	// where the compositor put it, in its parent's pixels
 	wl_surface* surface = nullptr;
 	xdg_surface* xdgSurface = nullptr;
 	xdg_popup* popup = nullptr;
@@ -123,14 +128,20 @@ void Paint(Popup* p)
 				cairo_fill(cr);
 				continue;
 			}
-			const bool lit = static_cast<int>(i) == p->hover && item.enabled;
+			const bool opened = static_cast<int>(i) == p->openRow && p->childSide != 0;
+			const bool lit = (static_cast<int>(i) == p->hover || opened) && item.enabled;
 			if (lit) {
 				cairo_pattern_t* raised = cairo_pattern_create_linear(0, y, 0, y + kRow);
 				const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
 				cairo_pattern_add_color_stop_rgb(raised, 0, light.r, light.g, light.b);
 				cairo_pattern_add_color_stop_rgb(raised, 0.5, kAccent.r, kAccent.g, kAccent.b);
 				cairo_pattern_add_color_stop_rgb(raised, 1, dark.r, dark.g, dark.b);
-				RoundedRectPath(cr, 4, y + 1, w - 8, kRow - 2, 10, 10, 10, 10);
+				if (opened) {
+					// the trail: the row runs on to the edge that the submenu is at, flat there
+					const double x0 = p->childSide > 0 ? 4 : -12, x1 = p->childSide > 0 ? w + 12 : w - 4;
+					RoundedRectPath(cr, x0, y + 1, x1 - x0, kRow - 2, 10, 10, 10, 10);
+				} else
+					RoundedRectPath(cr, 4, y + 1, w - 8, kRow - 2, 10, 10, 10, 10);
 				cairo_set_source(cr, raised);
 				cairo_fill(cr);
 				cairo_pattern_destroy(raised);
@@ -159,8 +170,17 @@ void Paint(Popup* p)
 				}
 			}
 			IconRef icon = item.icon;
-			if (!icon && !item.iconName.empty())
-				icon = CachedIcon(item.iconName, kIconSize);
+			if (!icon && !item.iconName.empty()) {
+				// (the names of an icon may be several, with commas: the first one the theme has)
+				size_t from = 0;
+				while (!icon && from <= item.iconName.size()) {
+					size_t comma = item.iconName.find(',', from);
+					if (comma == std::string::npos)
+						comma = item.iconName.size();
+					icon = CachedIcon(item.iconName.substr(from, comma - from), kIconSize);
+					from = comma + 1;
+				}
+			}
 			if (icon) {
 				{
 					cairo_save(cr);
@@ -201,6 +221,27 @@ void Paint(Popup* p)
 				else
 					cairo_set_source_rgba(cr, 0.10, 0.10, 0.16, alpha);
 				cairo_stroke(cr);
+			}
+		}
+		// the trail of this menu's origin: a strip along the edge that faces its parent, from the top down to the parent's row
+		if (p->parent != nullptr && p->trailSide != 0) {
+			const double stripW = 12;
+			const double x0 = p->trailSide < 0 ? -4 : w - stripW + 4;
+			const double y0 = -4, y1 = std::min(h + 4, p->trailRowY + kRow - 1);
+			if (y1 > 0) {
+				cairo_pattern_t* raised = cairo_pattern_create_linear(x0, 0, x0 + stripW, 0);
+				const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
+				if (p->trailSide < 0) {
+					cairo_pattern_add_color_stop_rgb(raised, 0, kAccent.r, kAccent.g, kAccent.b);
+					cairo_pattern_add_color_stop_rgb(raised, 1, light.r, light.g, light.b);
+				} else {
+					cairo_pattern_add_color_stop_rgb(raised, 0, light.r, light.g, light.b);
+					cairo_pattern_add_color_stop_rgb(raised, 1, dark.r, dark.g, dark.b);
+				}
+				RoundedRectPath(cr, x0, y0, stripW, y1 - y0, 6, 6, 6, 6);
+				cairo_set_source(cr, raised);
+				cairo_fill(cr);
+				cairo_pattern_destroy(raised);
 			}
 		}
 		// the arrows of a long menu that scrolls
@@ -244,8 +285,26 @@ const xdg_surface_listener kXdgSurfaceListener = {
 	},
 };
 
+// The compositor has put the popup somewhere: that tells which side of its parent it is on, and so where the trail runs.
+void PopupPlaced(void* data, xdg_popup*, int32_t x, int32_t y, int32_t, int32_t)
+{
+	auto* p = static_cast<Popup*>(data);
+	p->popupX = x;
+	p->popupY = y;
+	Popup* parent = p->parent;
+	if (parent == nullptr || p->parentRow < 0 || p->parentRow >= static_cast<int>(parent->tops.size()))
+		return;
+	const int side = (x + p->width / 2.0 > parent->width / 2.0) ? 1 : -1;
+	p->trailSide = -side;
+	parent->childSide = side;
+	parent->openRow = p->parentRow;
+	p->trailRowY = kPad + parent->tops[p->parentRow] - parent->scroll - y;
+	Paint(p);
+	Paint(parent);
+}
+
 const xdg_popup_listener kPopupListener = {
-	[](void*, xdg_popup*, int32_t, int32_t, int32_t, int32_t) {},
+	PopupPlaced,
 	[](void*, xdg_popup*) { RunLater([]() { CloseMenus(); }); },		// the compositor took it away: a press outside
 	[](void*, xdg_popup*, uint32_t) {},
 };
@@ -296,8 +355,12 @@ void CloseFrom(size_t index)
 		Destroy(gStack.back().get());
 		gStack.pop_back();
 	}
-	if (!gStack.empty() && index > 0)
-		gStack.back()->hover = gStack.back()->hover;
+	if (!gStack.empty() && index > 0) {
+		Popup* top = gStack.back().get();
+		top->openRow = -1;
+		top->childSide = 0;
+		Paint(top);
+	}
 }
 
 void OpenSubmenu(Popup* parent, int row)
@@ -342,6 +405,15 @@ void OpenMenu(std::vector<MenuItem> items, const MenuAnchor& anchor)
 	LayOut(root.get());
 	Popup* raw = root.get();
 	gStack.push_back(std::move(root));
+	if (anchor.side != 0) {
+		// beside the rectangle, level with its top (the way the Deskbar's menu opens from a bar at the side of the screen)
+		const bool left = anchor.side < 0;
+		Create(raw, nullptr, anchor.x, anchor.y, anchor.w, anchor.h,
+			left ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_TOP_RIGHT,
+			left ? XDG_POSITIONER_GRAVITY_BOTTOM_LEFT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, 0, 0,
+			XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y);
+		return;
+	}
 	Create(raw, nullptr, anchor.x, anchor.y, anchor.w, anchor.h,
 		anchor.above ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_BOTTOM_LEFT,
 		anchor.above ? XDG_POSITIONER_GRAVITY_TOP_RIGHT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, 0, 0,
