@@ -7,7 +7,7 @@ ProcessController, and a menu. It is drawn with cairo on a layer-shell surface, 
 It is a sibling of [hDesktop](https://github.com/ablyssx74/hDesktop) (the dock) and uses the same kind of backend: the
 compositor's window management protocols, StatusNotifierItem for the tray, PulseAudio for the volume.
 
-Status: **just started** (v0.12.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
+Status: **just started** (v0.13.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
 block) and its menu, the CPU graph, the clock, the volume icon, the system tray (with the programs' own menus), the program tabs and a settings window.
 
 ## Places
@@ -33,6 +33,13 @@ through `loginctl`, the others through `systemctl`); Recent documents and Recent
 applications (the ones this menu started); and Applications (by category) and Preferences (the settings programs). The row of
 a menu that has a submenu open stays lit and runs on to the submenu, and a strip along the submenu's edge runs from its top to
 that row: the snake trail. A long list scrolls with the wheel; a press outside closes the menus. Each menu is an `xdg_popup`.
+
+**The CPU graph's menu** (a right click on the graph), as ProcessController's and as hDesktop's: **Quit an application** (the programs
+you are running, without the ones the session needs; it asks first, and sends them SIGTERM), **Memory usage** (the system's memory,
+and every process with what it has written to and all the RAM it has, in a bar), **Processes and CPU usage** (every process, the
+busiest first, with a bar of what it takes; each one opens its threads, with their own bars and nice values to choose, and
+**Force Kill**, which asks first) and **Power saving** (when `power-profiles-daemon` is there). The lists follow the system while
+they are open.
 
 **Tooltips.** Rest the pointer on something for half a second and a dark capsule says what it is: the CPU load on the graph, the date
 on the clock, the level on the volume icon, the name of a tray icon, a program's name (and how many windows it has, or the title of its
@@ -95,7 +102,7 @@ own (ContextMenu).
    SnakeTracker 1.0.51 (straight at the screen's edge, round at the other end).
 6. **The horizontal bars** (done): the tabs side by side, and the list of a program's windows as a menu under its tab.
 7. **The menu** (done in a first form): the header opens a menu with the applications by category, power actions and quit.
-   Still to come: the CPU graph's menu.
+
 8. **Settings** (done), and a PKGBUILD.
 
 The Haiku Deskbar's four small corner layouts are not planned.

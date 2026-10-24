@@ -30,7 +30,9 @@
 #define namespace namespace_
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #undef namespace
+#include "alert.h"
 #include "apps.h"
+#include "cpumenu.h"
 #include "cpu.h"
 #include "icon.h"
 #include "icons.h"
@@ -83,6 +85,7 @@ struct App {
 	bool clickFirst = false;
 	std::string debugClick, debugSubmenus, debugSettings, debugTooltip;
 	std::string tipKey;
+	bool debugAlert = false;
 	guint tipTimer = 0;
 	Placement shownPlacement = Placement::TopRight;
 	bool redrawQueued = false;
@@ -808,6 +811,8 @@ void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface* surface, wl_fixed_t 
 			MenuPointerEnter(surface, wl_fixed_to_double(x), wl_fixed_to_double(y));
 		else if (SettingsOwnsSurface(surface))
 			SettingsPointerEnter(wl_fixed_to_double(x), wl_fixed_to_double(y));
+		else if (AlertOwnsSurface(surface))
+			AlertPointerEnter(surface, wl_fixed_to_double(x), wl_fixed_to_double(y));
 		return;
 	}
 	gApp.pointerX = wl_fixed_to_double(x);
@@ -821,6 +826,8 @@ void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface* surface)
 	if (surface != gApp.surface) {
 		if (SettingsOwnsSurface(surface))
 			SettingsPointerLeave();
+		else if (AlertOwnsSurface(surface))
+			AlertPointerLeave();
 		else
 			MenuPointerLeave();
 		if (gWl.pointerSurface == surface)
@@ -838,6 +845,8 @@ void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 	if (gWl.pointerSurface != gApp.surface) {
 		if (SettingsOwnsSurface(gWl.pointerSurface))
 			SettingsPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
+		else if (AlertOwnsSurface(gWl.pointerSurface))
+			AlertPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
 		else
 			MenuPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
 		return;
@@ -1122,6 +1131,8 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 	if (gWl.pointerSurface != gApp.surface && gWl.pointerSurface != nullptr) {
 		if (SettingsOwnsSurface(gWl.pointerSurface))
 			SettingsPointerButton(button, state);
+		else if (AlertOwnsSurface(gWl.pointerSurface))
+			AlertPointerButton(button, state);
 		else
 			MenuPointerButton(button, state);
 		return;
@@ -1135,6 +1146,10 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 	}
 	if (gSettings.showVolume && gLayout.volume.Contains(gApp.pointerX, gApp.pointerY)) {
 		ClickVolume(button);
+		return;
+	}
+	if (button == BTN_RIGHT && gSettings.showCpu && gLayout.graph.Contains(gApp.pointerX, gApp.pointerY)) {
+		OpenMenuAt(CpuMenuItems(), gLayout.graph);
 		return;
 	}
 	if (button == BTN_RIGHT) {
@@ -1367,6 +1382,8 @@ int main(int argc, char** argv)
 			gApp.debugClick = argv[++i];		// for testing: tab:N, chevron:N or row:N, clicked a few seconds after the start
 		} else if (strcmp(argv[i], "--debug-submenus") == 0 && i + 1 < argc) {
 			gApp.debugSubmenus = argv[++i];		// for testing, after "--debug-click header": "2,5" opens row 2, then row 5 of that
+		} else if (strcmp(argv[i], "--debug-alert") == 0) {
+			gApp.debugAlert = true;		// for testing: a window with a question, a few seconds after the start
 		} else if (strcmp(argv[i], "--debug-tooltip") == 0 && i + 1 < argc) {
 			gApp.debugTooltip = argv[++i];		// for testing: volume, cpu, clock, cell:N, tab:N or row:N: the pointer is put there
 		} else if (strcmp(argv[i], "--debug-settings") == 0 && i + 1 < argc) {
@@ -1461,7 +1478,10 @@ int main(int argc, char** argv)
 				r = gLayout.rows[n].row;
 			else if (what == "header")
 				r = gLayout.header;
-			else if (what == "tabR" && n < gLayout.tabs.size()) {
+			else if (what == "cpuR") {
+				OpenMenuAt(CpuMenuItems(), gLayout.graph);		// (a right click on the CPU graph)
+				return;
+			} else if (what == "tabR" && n < gLayout.tabs.size()) {
 				OpenWindowList(n);		// (a right click on a program's tab)
 				return;
 			} else if (what == "cellR" && n < gLayout.cells.size()) {
@@ -1493,6 +1513,14 @@ int main(int argc, char** argv)
 					break;
 				at = comma + 1;
 			}
+		});
+	}
+	if (gApp.debugAlert) {
+		RunAfter(5000, []() {
+			ShowAlert("Force Terminate",
+				"Are you sure you want to force terminate the process 'example' (PID: 1234)?\n\n"
+				"Unsaved progress inside this application will be lost.",
+				{"Cancel", "Force Kill"}, [](int choice) { DebugLog("the alert said %d\n", choice); }, 0);
 		});
 	}
 	if (!gApp.debugTooltip.empty()) {

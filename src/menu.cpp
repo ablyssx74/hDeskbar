@@ -25,6 +25,9 @@ constexpr int kSeparator = 7;		// a separator's
 constexpr int kPad = 4;			// above the first row and under the last
 constexpr double kMenuRadius = 8;
 constexpr int kIconSize = 16;
+constexpr double kValueColumn = 54;		// the text of a bar row
+constexpr double kBarWidth = 80;			// and its bar
+constexpr double kMemBarWidth = 100;		// the bar of a memory row
 
 struct Popup {
 	std::vector<MenuItem> items;
@@ -46,6 +49,11 @@ struct Popup {
 	xdg_surface* xdgSurface = nullptr;
 	xdg_popup* popup = nullptr;
 	guint openTimer = 0;
+	// a menu that is made again while it is open (the CPU graph's)
+	std::function<std::vector<MenuItem>()> source;
+	unsigned liveMs = 0;
+	guint liveTimer = 0;
+	double nameColumn = 0, numbersWidth = 0;	// the columns of the bar rows
 };
 
 std::vector<std::unique_ptr<Popup>> gStack;		// the menus that are open: the first is the root, the last the newest
@@ -67,24 +75,67 @@ double MeasureLabel(const std::string& text)
 	return width;
 }
 
-void LayOut(Popup* p)
+// Where the rows are (and, with a bar, the room for it): the part of the layout that follows what the items are.
+void Reflow(Popup* p)
 {
 	p->tops.clear();
 	int y = 0;
-	double widest = 0;
 	for (const MenuItem& item : p->items) {
 		p->tops.push_back(y);
 		y += item.separator ? kSeparator : kRow;
+	}
+	p->content = y;
+}
+
+// A size in KiB the way Haiku writes it: "923.98 MiB", "1.58 GiB".
+std::string FormatSize(long long kb)
+{
+	double value = static_cast<double>(kb) * 1024.0;
+	static const char* const units[] = {"B", "KiB", "MiB", "GiB", "TiB"};
+	int unit = 0;
+	while (value >= 1024.0 && unit < 4) {
+		value /= 1024.0;
+		unit++;
+	}
+	char text[48];
+	if (unit == 0)
+		snprintf(text, sizeof(text), "%d B", static_cast<int>(value));
+	else
+		snprintf(text, sizeof(text), "%.2f %s", value, units[unit]);
+	return text;
+}
+
+void LayOut(Popup* p)
+{
+	Reflow(p);
+	double widest = 0;
+	bool bars = false, memory = false, arrows = false;
+	for (const MenuItem& item : p->items) {
 		if (!item.separator)
 			widest = std::max(widest, MeasureLabel(item.label));
 		if (!item.iconName.empty() || item.icon)
 			p->hasIcons = true;
 		if (item.check != kCheckNone)
 			p->hasChecks = true;
+		if (item.barPercent >= 0)
+			bars = true;
+		if (item.memRow)
+			memory = true;
+		if (item.submenu && !item.noArrow)
+			arrows = true;
 	}
-	p->content = y;
-	p->width = static_cast<int>(std::ceil(widest)) + 8 + (p->hasIcons ? 24 : 4) + (p->hasChecks ? 16 : 0) + 26;
-	p->width = std::clamp(p->width, 150, 420);
+	const double left = (p->hasIcons ? 34 : 12) + (p->hasChecks ? 16 : 0);
+	if (memory) {
+		p->numbersWidth = 2 * MeasureLabel("1023.99 MiB") + 20;
+		p->nameColumn = std::clamp(widest + 16, 120.0, 280.0);
+		p->width = static_cast<int>(std::ceil(left + p->nameColumn + p->numbersWidth + kMemBarWidth + 16));
+	} else if (bars) {
+		p->nameColumn = std::clamp(widest + 16, 120.0, 280.0);
+		p->width = static_cast<int>(std::ceil(left + p->nameColumn + kValueColumn + kBarWidth + 16 + (arrows ? 14 : 0)));
+	} else {
+		p->width = static_cast<int>(std::ceil(widest)) + 8 + (p->hasIcons ? 24 : 4) + (p->hasChecks ? 16 : 0) + 26;
+		p->width = std::clamp(p->width, 150, 420);
+	}
 	const int most = (gWl.screenHeight > 0 ? gWl.screenHeight : 700) - 40;
 	p->height = std::min(p->content + 2 * kPad, std::max(most, 100));
 }
@@ -129,7 +180,7 @@ void Paint(Popup* p)
 				continue;
 			}
 			const bool opened = static_cast<int>(i) == p->openRow && p->childSide != 0;
-			const bool lit = (static_cast<int>(i) == p->hover || opened) && item.enabled;
+			const bool lit = (static_cast<int>(i) == p->hover || opened) && item.enabled && !item.header;
 			if (lit) {
 				cairo_pattern_t* raised = cairo_pattern_create_linear(0, y, 0, y + kRow);
 				const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
@@ -193,24 +244,85 @@ void Paint(Popup* p)
 				}
 			}
 			const double textX = (p->hasIcons ? 34 : 12) + checkWidth;
-			PangoLayout* layout = pango_cairo_create_layout(cr);
-			PangoFontDescription* font = pango_font_description_from_string("Sans 9");
-			pango_layout_set_font_description(layout, font);
-			pango_layout_set_text(layout, item.label.c_str(), -1);
-			pango_layout_set_width(layout, static_cast<int>((w - textX - 20) * PANGO_SCALE));
-			pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-			int textWidth = 0, textHeight = 0;
-			pango_layout_get_pixel_size(layout, &textWidth, &textHeight);
-			if (lit)
-				cairo_set_source_rgb(cr, 1, 1, 1);
-			else
-				cairo_set_source_rgba(cr, 0.10, 0.10, 0.16, alpha);
-			cairo_move_to(cr, textX, y + (kRow - textHeight) / 2.0);
-			pango_cairo_show_layout(cr, layout);
-			pango_font_description_free(font);
-			g_object_unref(layout);
+			// a line of text in the row, cut off with ... at the width
+			auto text = [&](const std::string& s, double x, double width, bool right = false) {
+				if (width <= 0)
+					return;
+				PangoLayout* layout = pango_cairo_create_layout(cr);
+				PangoFontDescription* font = pango_font_description_from_string(item.header ? "Sans Bold 9" : "Sans 9");
+				pango_layout_set_font_description(layout, font);
+				pango_layout_set_text(layout, s.c_str(), -1);
+				pango_layout_set_width(layout, static_cast<int>(width * PANGO_SCALE));
+				pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+				int textWidth = 0, textHeight = 0;
+				pango_layout_get_pixel_size(layout, &textWidth, &textHeight);
+				if (lit)
+					cairo_set_source_rgb(cr, 1, 1, 1);
+				else
+					cairo_set_source_rgba(cr, 0.10, 0.10, 0.16, item.header ? 0.65 : alpha);
+				cairo_move_to(cr, right ? x + width - textWidth : x, y + (kRow - textHeight) / 2.0);
+				pango_cairo_show_layout(cr, layout);
+				pango_font_description_free(font);
+				g_object_unref(layout);
+			};
 
-			if (item.submenu) {
+			if (item.memRow) {
+				// the name, the two sizes, and a bar in three pieces (what is written to, what else the program has, the rest)
+				text(item.label, textX, p->nameColumn - 8);
+				const double numbersX = textX + p->nameColumn, barX = numbersX + p->numbersWidth;
+				text(FormatSize(item.memFirstKb), numbersX, p->numbersWidth / 2 - 4, true);
+				text(FormatSize(item.memSecondKb), numbersX + p->numbersWidth / 2, p->numbersWidth / 2 - 4, true);
+				const double barH = 10, barY = y + (kRow - barH) / 2, inner = kMemBarWidth - 2;
+				const double e1 = std::clamp(item.memBarFirst, 0.0, 1.0) * inner, e2 = std::clamp(item.memBarSecond, 0.0, 1.0) * inner;
+				cairo_set_source_rgb(cr, 1, 1, 1);
+				cairo_rectangle(cr, barX + 1, barY + 1, inner, barH - 2);
+				cairo_fill(cr);
+				if (e2 > e1) {
+					if (item.memSystem)
+						cairo_set_source_rgb(cr, 193 / 255.0, 122 / 255.0, 1.0);
+					else
+						cairo_set_source_rgb(cr, 165 / 255.0, 165 / 255.0, 246 / 255.0);
+					cairo_rectangle(cr, barX + 1 + e1, barY + 1, e2 - e1, barH - 2);
+					cairo_fill(cr);
+				}
+				if (e1 > 0) {
+					cairo_set_source_rgb(cr, 20 / 255.0, 20 / 255.0, 231 / 255.0);
+					cairo_rectangle(cr, barX + 1, barY + 1, e1, barH - 2);
+					cairo_fill(cr);
+				}
+				cairo_set_source_rgb(cr, 90 / 255.0, 90 / 255.0, 90 / 255.0);
+				cairo_set_line_width(cr, 1);
+				cairo_rectangle(cr, barX + 0.5, barY + 0.5, kMemBarWidth - 1, barH - 1);
+				cairo_stroke(cr);
+			} else if (item.barPercent >= 0) {
+				// the name, the percentage, and a bar: green when the program takes a lot or little, orange between
+				text(item.label, textX, p->nameColumn - 8);
+				const double valueX = textX + p->nameColumn;
+				text(item.valueText, valueX, kValueColumn - 4);
+				const double barX = valueX + kValueColumn, barH = 10, barY = y + (kRow - barH) / 2;
+				const double percent = std::clamp(item.barPercent, 0.0, 100.0);
+				cairo_set_source_rgb(cr, 45 / 255.0, 45 / 255.0, 45 / 255.0);
+				cairo_rectangle(cr, barX, barY, kBarWidth, barH);
+				cairo_fill(cr);
+				if (item.barPercent > 75.0)
+					cairo_set_source_rgb(cr, 50 / 255.0, 205 / 255.0, 50 / 255.0);
+				else if (item.barPercent > 35.0)
+					cairo_set_source_rgb(cr, 1.0, 140 / 255.0, 0);
+				else
+					cairo_set_source_rgb(cr, 50 / 255.0, 205 / 255.0, 50 / 255.0);
+				if (percent > 0) {
+					cairo_rectangle(cr, barX, barY, kBarWidth * percent / 100.0, barH);
+					cairo_fill(cr);
+				}
+				cairo_set_source_rgb(cr, 90 / 255.0, 90 / 255.0, 90 / 255.0);
+				cairo_set_line_width(cr, 1);
+				cairo_rectangle(cr, barX + 0.5, barY + 0.5, kBarWidth - 1, barH - 1);
+				cairo_stroke(cr);
+			} else {
+				text(item.label, textX, w - textX - 20);
+			}
+
+			if (item.submenu && !item.noArrow) {
 				const double cx = w - 14, cy = y + kRow / 2.0;
 				cairo_set_line_width(cr, 1.6);
 				cairo_move_to(cr, cx - 2, cy - 3.5);
@@ -276,6 +388,31 @@ void Paint(Popup* p)
 
 void CloseFrom(size_t index);
 
+// A menu that is made again while it is open: the new rows go in the same window (the room it has stays as it is; rows past the
+// end are reached by scrolling). While a submenu of it is open it is left alone, so the row that submenu belongs to does not move.
+gboolean LiveTick(gpointer data)
+{
+	Popup* p = static_cast<Popup*>(data);
+	size_t at = 0;
+	while (at < gStack.size() && gStack[at].get() != p)
+		at++;
+	if (at == gStack.size())
+		return G_SOURCE_REMOVE;
+	if (at + 1 < gStack.size() || !p->source)
+		return G_SOURCE_CONTINUE;
+	std::vector<MenuItem> fresh = p->source();
+	if (fresh.empty())
+		return G_SOURCE_CONTINUE;
+	p->items = std::move(fresh);
+	Reflow(p);
+	const int room = std::max(0, p->content + 2 * kPad - p->height);
+	p->scroll = std::clamp(p->scroll, 0, room);
+	if (gOver == p)
+		p->hover = ItemAt(p, gPointerY);
+	Paint(p);
+	return G_SOURCE_CONTINUE;
+}
+
 const xdg_surface_listener kXdgSurfaceListener = {
 	[](void* data, xdg_surface* xs, uint32_t serial) {
 		auto* p = static_cast<Popup*>(data);
@@ -338,6 +475,8 @@ void Destroy(Popup* p)
 {
 	if (p->openTimer != 0)
 		g_source_remove(p->openTimer);
+	if (p->liveTimer != 0)
+		g_source_remove(p->liveTimer);
 	if (p->popup != nullptr)
 		xdg_popup_destroy(p->popup);
 	if (p->xdgSurface != nullptr)
@@ -383,9 +522,15 @@ void OpenSubmenu(Popup* parent, int row)
 		return;
 	child->parent = parent;
 	child->parentRow = row;
+	if (item.liveMs > 0) {
+		child->source = item.submenu;
+		child->liveMs = item.liveMs;
+	}
 	LayOut(child.get());
 	Popup* raw = child.get();
 	gStack.push_back(std::move(child));
+	if (raw->liveMs > 0)
+		raw->liveTimer = g_timeout_add(raw->liveMs, LiveTick, raw);
 	const int y = kPad + parent->tops[row] - parent->scroll;
 	Create(raw, parent, 0, y, parent->width, kRow, XDG_POSITIONER_ANCHOR_TOP_RIGHT, XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, -3, -kPad,
 		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y

@@ -29,11 +29,30 @@ struct MenuItem {
 	bool enabled = true;
 	std::function<void()> action;
 	std::function<std::vector<MenuItem>()> submenu;		// the items of the submenu, made when it opens
+	bool header = false;			// a title: dim, and not for choosing
+	bool noArrow = false;			// a submenu that has no arrow on its row (the CPU graph's, like ProcessController's)
+	unsigned liveMs = 0;			// the submenu is made again this often while it is open
+	// a row with a bar of how much of the processor a program takes (barPercent 0 to 100, with its text), as ProcessController has them
+	double barPercent = -1;
+	std::string valueText;
+	// a memory row: two sizes in KiB, and what share of the bar the first, and the first and second together, fill
+	bool memRow = false, memSystem = false;
+	long long memFirstKb = 0, memSecondKb = 0;
+	double memBarFirst = 0, memBarSecond = 0;
 
 	static MenuItem Separator()
 	{
 		MenuItem item;
 		item.separator = true;
+		return item;
+	}
+
+	static MenuItem Header(const std::string& text)
+	{
+		MenuItem item;
+		item.label = text;
+		item.header = true;
+		item.enabled = false;
 		return item;
 	}
 };
