@@ -731,9 +731,9 @@ void SyncTrigger();
 void Present()
 {
 	if (gApp.hidden) {
-		// shrunk to a line along the edge
+		// shrunk to a line along the edge, with nothing to see (but there to touch)
 		wl_buffer* line = NewShmBuffer(gApp.width, gApp.height, [](cairo_t* cr) {
-			cairo_set_source_rgb(cr, kAccent.r, kAccent.g, kAccent.b);
+			cairo_set_source_rgba(cr, 0, 0, 0, 0.004);
 			cairo_paint(cr);
 		});
 		if (line != nullptr) {
@@ -1342,7 +1342,7 @@ void Usage(const char* program)
 	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu] [--no-tray] [--no-volume] [--no-tabs]\n", program);
 }
 
-constexpr int kStrip = 3;		// a hidden bar: this many pixels at the edge of the screen
+constexpr int kStrip = 3;		// a hidden bar: this many pixels at the edge of the screen, transparent
 
 // Where the bar is: its layer (above the windows, or behind them unless it has been brought over them), its size (a line when it
 // is hidden), and the room it keeps clear.
