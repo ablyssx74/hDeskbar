@@ -18,6 +18,9 @@
 void ShowAlert(const std::string& title, const std::string& text, std::vector<std::string> buttons,
 	std::function<void(int)> onChoice, int defaultButton = -1);
 
+// The About window.
+void ShowAbout();
+
 bool AlertOwnsSurface(wl_surface* surface);
 void AlertPointerEnter(wl_surface* surface, double x, double y);
 void AlertPointerLeave();

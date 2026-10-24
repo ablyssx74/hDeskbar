@@ -8,6 +8,8 @@
 
 #include "leaf.h"
 
+#include "alert.h"
+
 #include <gio/gdesktopappinfo.h>
 #include <gio/gio.h>
 #include <glib/gstdio.h>
@@ -410,7 +412,7 @@ std::vector<MenuItem> LeafMenuItems()
 	MenuItem about;
 	about.label = "About hDeskbar";
 	about.iconName = "help-about";
-	about.action = []() { Run("xdg-open https://github.com/ablyssx74/hDeskbar"); };
+	about.action = []() { ShowAbout(); };
 	items.push_back(about);
 
 	const std::string find = FindCommand();

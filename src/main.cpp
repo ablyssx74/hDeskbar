@@ -88,7 +88,7 @@ struct App {
 	bool clickFirst = false;
 	std::string debugClick, debugSubmenus, debugSettings, debugTooltip;
 	std::string tipKey;
-	bool debugAlert = false;
+	bool debugAlert = false, debugAbout = false;
 	guint tipTimer = 0;
 	Placement shownPlacement = Placement::TopRight;
 	bool redrawQueued = false;
@@ -1513,6 +1513,8 @@ int main(int argc, char** argv)
 			gApp.debugSubmenus = argv[++i];		// for testing, after "--debug-click header": "2,5" opens row 2, then row 5 of that
 		} else if (strcmp(argv[i], "--debug-alert") == 0) {
 			gApp.debugAlert = true;		// for testing: a window with a question, a few seconds after the start
+		} else if (strcmp(argv[i], "--debug-about") == 0) {
+			gApp.debugAbout = true;		// for testing: the About window, a few seconds after the start
 		} else if (strcmp(argv[i], "--debug-tooltip") == 0 && i + 1 < argc) {
 			gApp.debugTooltip = argv[++i];		// for testing: volume, cpu, clock, cell:N, tab:N or row:N: the pointer is put there
 		} else if (strcmp(argv[i], "--debug-settings") == 0 && i + 1 < argc) {
@@ -1648,6 +1650,8 @@ int main(int argc, char** argv)
 			}
 		});
 	}
+	if (gApp.debugAbout)
+		RunAfter(5000, []() { ShowAbout(); });
 	if (gApp.debugAlert) {
 		RunAfter(5000, []() {
 			ShowAlert("Force Terminate",
