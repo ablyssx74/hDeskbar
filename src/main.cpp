@@ -24,10 +24,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #define namespace namespace_
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #undef namespace
+#include "cpu.h"
 #include "icon.h"
 #include "xdg-shell-client-protocol.h"
 
@@ -45,6 +47,8 @@ constexpr int kHeaderHeight = 24;		// the block with the icon (a vertical bar)
 constexpr int kRowHeight = 24;			// the row of the clock, and later the CPU graph and the tray
 constexpr int kHeaderWidth = 48;		// the same block in a horizontal bar
 constexpr int kIconSize = 20;
+constexpr int kGraphWidth = 56;
+constexpr int kRefreshMs = 500;		// how often the CPU graph moves
 
 Color Mix(const Color& a, const Color& b, double t)
 {
@@ -64,6 +68,9 @@ struct App {
 	int width = 150, height = 2 + kHeaderHeight + kRowHeight;		// what the bar asks for (a horizontal bar's width is the screen's)
 	bool running = true;
 	bool configured = false;
+	bool showCpu = true;
+	CpuSampler cpu;
+	std::vector<float> cpuShown;	// the bars as drawn: the loads, smoothed
 };
 
 App gApp;
@@ -124,6 +131,30 @@ void DrawHeader(cairo_t* cr, double x, double y, double w, double h, double tl, 
 	DrawSnakeTrackerIcon(cr, x + std::floor((w - kIconSize) / 2), y + std::floor((h - kIconSize) / 2), kIconSize);
 }
 
+// The CPU graph, in the place of ProcessController: a dark box with one bar for each processor.
+void DrawCpuGraph(cairo_t* cr, double x, double y, double w, double h)
+{
+	const std::vector<float>& loads = gApp.cpu.coreLoads;
+	const size_t count = std::max<size_t>(loads.size(), 1);
+	if (gApp.cpuShown.size() != count)
+		gApp.cpuShown.assign(count, 0.0f);
+	RoundedRectPath(cr, x, y, w, h, 3, 3, 3, 3);
+	cairo_set_source_rgba(cr, 0.03, 0.03, 0.05, 0.95);
+	cairo_fill(cr);
+
+	const double spacing = 1.5;
+	const double barWidth = (w - 2 - spacing * (count + 1)) / count;
+	cairo_set_source_rgba(cr, 0.57, 0.12, 0.99, 0.90);
+	for (size_t i = 0; i < count; i++) {
+		const float target = i < loads.size() ? loads[i] : 0.0f;
+		gApp.cpuShown[i] = gApp.cpuShown[i] * 0.6f + target * 0.4f;
+		const double left = x + 1 + spacing + i * (barWidth + spacing);
+		const double top = y + h - 1 - gApp.cpuShown[i] * (h - 2);
+		cairo_rectangle(cr, left, top, barWidth, y + h - 1 - top);
+	}
+	cairo_fill(cr);
+}
+
 void DrawClock(cairo_t* cr, double x, double y, double w, double h)
 {
 	time_t now = time(nullptr);
@@ -177,9 +208,13 @@ void Draw(cairo_t* cr, int width, int height)
 	if (vertical) {
 		DrawHeader(cr, 1, 1, width - 2, kHeaderHeight, tl > 0 ? tl - 1 : 0, tr > 0 ? tr - 1 : 0, 8, 8);
 		DrawClock(cr, 1, 1 + kHeaderHeight, width - 2, kRowHeight);
+		if (gApp.showCpu)
+			DrawCpuGraph(cr, 7, 1 + kHeaderHeight + 3, kGraphWidth, kRowHeight - 6);
 	} else {
 		DrawHeader(cr, 1, 1, kHeaderWidth, height - 2, tl > 0 ? tl - 1 : 0, 8, 8, bl > 0 ? bl - 1 : 0);
 		DrawClock(cr, width - 110 - 1, 1, 110, height - 2);
+		if (gApp.showCpu)
+			DrawCpuGraph(cr, width - 110 - 1 - kGraphWidth - 6, 4, kGraphWidth, height - 8);
 	}
 }
 
@@ -286,7 +321,7 @@ bool ParsePlacement(const std::string& name, Placement* placement)
 
 void Usage(const char* program)
 {
-	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom]\n", program);
+	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu]\n", program);
 }
 
 }	// namespace
@@ -299,6 +334,8 @@ int main(int argc, char** argv)
 				Usage(argv[0]);
 				return 1;
 			}
+		} else if (strcmp(argv[i], "--no-cpu") == 0) {
+			gApp.showCpu = false;
 		} else if (strcmp(argv[i], "--version") == 0) {
 			printf("hdeskbar %s\n", APP_VERSION);
 			return 0;
@@ -351,6 +388,8 @@ int main(int argc, char** argv)
 
 	// the clock changes on the minute: wait for the compositor, or for the next minute, whichever comes first
 	int shown = -1;
+	long long sampledAt = 0;
+	gApp.cpu.Sample();
 	while (gApp.running) {
 		while (wl_display_prepare_read(gApp.display) != 0)
 			wl_display_dispatch_pending(gApp.display);
@@ -360,8 +399,9 @@ int main(int argc, char** argv)
 		}
 		time_t now = time(nullptr);
 		const int toNextMinute = static_cast<int>((60 - now % 60) * 1000 + 50);
+		const int wait = gApp.showCpu ? std::min(toNextMinute, kRefreshMs) : toNextMinute;
 		pollfd descriptor = { wl_display_get_fd(gApp.display), POLLIN, 0 };
-		poll(&descriptor, 1, toNextMinute);
+		poll(&descriptor, 1, wait);
 		if (descriptor.revents & POLLIN) {
 			if (wl_display_read_events(gApp.display) < 0)
 				break;
@@ -370,7 +410,19 @@ int main(int argc, char** argv)
 		wl_display_dispatch_pending(gApp.display);
 
 		const int minute = static_cast<int>(time(nullptr) / 60);
-		if (gApp.configured && minute != shown) {
+		bool redraw = minute != shown;
+		if (gApp.showCpu) {
+			// (only when the time is up: a wake-up for some other reason would give a sample of nothing)
+			timespec ts;
+			clock_gettime(CLOCK_MONOTONIC, &ts);
+			const long long ms = ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
+			if (ms - sampledAt >= kRefreshMs - 50) {
+				sampledAt = ms;
+				gApp.cpu.Sample();
+				redraw = true;
+			}
+		}
+		if (gApp.configured && redraw) {
 			shown = minute;
 			Present(gApp.width, gApp.height);
 		}
