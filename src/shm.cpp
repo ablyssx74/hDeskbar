@@ -8,6 +8,10 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cmath>
+
+#include "scale.h"
 #include "wl.h"
 
 namespace {
@@ -21,10 +25,13 @@ const wl_buffer_listener kBufferListener = { BufferRelease };
 
 }	// namespace
 
-wl_buffer* NewShmBuffer(int width, int height, const std::function<void(cairo_t*)>& draw)
+wl_buffer* NewShmBuffer(int logicalWidth, int logicalHeight, const std::function<void(cairo_t*)>& draw)
 {
-	if (width <= 0 || height <= 0)
+	if (logicalWidth <= 0 || logicalHeight <= 0)
 		return nullptr;
+	const double scale = RenderScale();
+	const int width = std::max(1, static_cast<int>(std::lround(logicalWidth * scale)));
+	const int height = std::max(1, static_cast<int>(std::lround(logicalHeight * scale)));
 	const int stride = width * 4;
 	const int size = stride * height;
 	int fd = memfd_create("hdeskbar", MFD_CLOEXEC);
@@ -41,6 +48,7 @@ wl_buffer* NewShmBuffer(int width, int height, const std::function<void(cairo_t*
 	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
 	cairo_paint(cr);
 	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+	cairo_scale(cr, width / static_cast<double>(logicalWidth), height / static_cast<double>(logicalHeight));
 	draw(cr);
 	cairo_destroy(cr);
 	cairo_surface_flush(surface);

@@ -15,6 +15,7 @@
 
 #include "loop.h"
 #include "settings.h"
+#include "scale.h"
 #include "shm.h"
 #include "style.h"
 #include "colorwindow.h"
@@ -185,8 +186,7 @@ void Paint(Window* w)
 	});
 	if (buffer == nullptr)
 		return;
-	wl_surface_attach(w->surface, buffer, 0, 0);
-	wl_surface_damage_buffer(w->surface, 0, 0, kWidth, kHeight);
+	AttachBuffer(w->surface, buffer, kWidth, kHeight);
 	wl_surface_commit(w->surface);
 }
 
@@ -198,8 +198,10 @@ void CloseWindow()
 		xdg_toplevel_destroy(gWindow->toplevel);
 	if (gWindow->xdgSurface != nullptr)
 		xdg_surface_destroy(gWindow->xdgSurface);
-	if (gWindow->surface != nullptr)
+	if (gWindow->surface != nullptr) {
+		ScaleForgetSurface(gWindow->surface);
 		wl_surface_destroy(gWindow->surface);
+	}
 	gWindow.reset();
 }
 
@@ -241,6 +243,7 @@ void OpenSettingsWindow()
 	Window* w = gWindow.get();
 	MakeHits(w);
 	w->surface = wl_compositor_create_surface(gWl.compositor);
+	ScaleTrackSurface(w->surface);
 	w->xdgSurface = xdg_wm_base_get_xdg_surface(gWl.wmBase, w->surface);
 	xdg_surface_add_listener(w->xdgSurface, &kXdgSurfaceListener, w);
 	w->toplevel = xdg_surface_get_toplevel(w->xdgSurface);

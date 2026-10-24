@@ -14,6 +14,7 @@
 #include "icons.h"
 #include "loop.h"
 #include "pill.h"
+#include "scale.h"
 #include "shm.h"
 #include "style.h"
 #include "util.h"
@@ -167,8 +168,11 @@ struct TrailBar {
 void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 {
 	using namespace PillGfx;
-	const int W = p->width, H = p->height;
-	const float w = static_cast<float>(W), h = static_cast<float>(H), kR = static_cast<float>(kMenuRadius), kBarW = kR;
+	cairo_matrix_t matrix;
+	cairo_get_matrix(cr, &matrix);
+	const float S = static_cast<float>(matrix.xx);		// device pixels to a logical one
+	const int W = std::max(1, static_cast<int>(std::lround(p->width * S))), H = std::max(1, static_cast<int>(std::lround(p->height * S)));
+	const float w = static_cast<float>(p->width), h = static_cast<float>(p->height), kR = static_cast<float>(kMenuRadius), kBarW = kR;
 	std::vector<Piece> pieces;
 	std::vector<Fillet> fillets;
 	const Popup* parent = p->parent;
@@ -283,36 +287,36 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 		fy1 = std::max(fy1, std::max(f.y, f.y + f.dy * kR));
 	}
 	const int margin = 10;		// what the shading reaches
-	const int bx0 = std::max(0, static_cast<int>(std::floor(fx0)) - margin), by0 = std::max(0, static_cast<int>(std::floor(fy0)) - margin);
-	const int bx1 = std::min(W - 1, static_cast<int>(std::ceil(fx1)) + margin), by1 = std::min(H - 1, static_cast<int>(std::ceil(fy1)) + margin);
+	const int bx0 = std::max(0, static_cast<int>(std::floor(fx0 * S)) - margin), by0 = std::max(0, static_cast<int>(std::floor(fy0 * S)) - margin);
+	const int bx1 = std::min(W - 1, static_cast<int>(std::ceil(fx1 * S)) + margin), by1 = std::min(H - 1, static_cast<int>(std::ceil(fy1 * S)) + margin);
 	if (bx1 < bx0 || by1 < by0)
 		return;
 	const int BW = bx1 - bx0 + 1, BH = by1 - by0 + 1;
 	std::vector<float> lit(static_cast<size_t>(BW) * BH, 0.0f), shade;
 	for (const Piece& q : pieces) {
-		const int x0 = std::max(bx0, static_cast<int>(std::floor(q.x)) - 1), x1 = std::min(bx1, static_cast<int>(std::ceil(q.x + q.w)) + 1);
-		const int y0 = std::max(by0, static_cast<int>(std::floor(q.y)) - 1), y1 = std::min(by1, static_cast<int>(std::ceil(q.y + q.h)) + 1);
+		const int x0 = std::max(bx0, static_cast<int>(std::floor(q.x * S)) - 1), x1 = std::min(bx1, static_cast<int>(std::ceil((q.x + q.w) * S)) + 1);
+		const int y0 = std::max(by0, static_cast<int>(std::floor(q.y * S)) - 1), y1 = std::min(by1, static_cast<int>(std::ceil((q.y + q.h) * S)) + 1);
 		for (int yy = y0; yy <= y1; yy++) {
 			for (int xx = x0; xx <= x1; xx++) {
 				float& dst = lit[static_cast<size_t>(yy - by0) * BW + (xx - bx0)];
-				dst = std::max(dst, RoundRectCoverage(xx + 0.5f, yy + 0.5f, q.x, q.y, q.w, q.h, q.tl, q.tr, q.br, q.bl));
+				dst = std::max(dst, RoundRectCoverage(xx + 0.5f, yy + 0.5f, q.x * S, q.y * S, q.w * S, q.h * S, q.tl * S, q.tr * S, q.br * S, q.bl * S));
 			}
 		}
 	}
 	for (const Fillet& f : fillets) {
-		const int x0 = std::max(bx0, static_cast<int>(std::floor(std::min(f.x, f.x + f.dx * kR))) - 1);
-		const int x1 = std::min(bx1, static_cast<int>(std::ceil(std::max(f.x, f.x + f.dx * kR))) + 1);
-		const int y0 = std::max(by0, static_cast<int>(std::floor(std::min(f.y, f.y + f.dy * kR))) - 1);
-		const int y1 = std::min(by1, static_cast<int>(std::ceil(std::max(f.y, f.y + f.dy * kR))) + 1);
+		const int x0 = std::max(bx0, static_cast<int>(std::floor(std::min(f.x, f.x + f.dx * kR) * S)) - 1);
+		const int x1 = std::min(bx1, static_cast<int>(std::ceil(std::max(f.x, f.x + f.dx * kR) * S)) + 1);
+		const int y0 = std::max(by0, static_cast<int>(std::floor(std::min(f.y, f.y + f.dy * kR) * S)) - 1);
+		const int y1 = std::min(by1, static_cast<int>(std::ceil(std::max(f.y, f.y + f.dy * kR) * S)) + 1);
 		for (int yy = y0; yy <= y1; yy++) {
 			for (int xx = x0; xx <= x1; xx++) {
 				float& dst = lit[static_cast<size_t>(yy - by0) * BW + (xx - bx0)];
-				dst = std::max(dst, FilletCoverage(xx + 0.5f, yy + 0.5f, f.x, f.y, f.dx, f.dy, kR));
+				dst = std::max(dst, FilletCoverage(xx + 0.5f, yy + 0.5f, f.x * S, f.y * S, f.dx, f.dy, kR * S));
 			}
 		}
 	}
 	// (the lit shapes stay inside the pill's corners)
-	const int cornerSize = static_cast<int>(std::ceil(kR)) + 1;
+	const int cornerSize = static_cast<int>(std::ceil(kR * S)) + 1;
 	for (int y = 0; y < BH; y++) {
 		const int py = by0 + y;
 		if (py >= cornerSize && py < H - cornerSize)
@@ -321,11 +325,11 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 			const int px = bx0 + x;
 			if (px >= cornerSize && px < W - cornerSize)
 				continue;
-			lit[static_cast<size_t>(y) * BW + x] *= RoundRectCoverage(px + 0.5f, py + 0.5f, 0, 0, w, h, static_cast<float>(tlR),
-				static_cast<float>(trR), static_cast<float>(brR), static_cast<float>(blR));
+			lit[static_cast<size_t>(y) * BW + x] *= RoundRectCoverage(px + 0.5f, py + 0.5f, 0, 0, static_cast<float>(W), static_cast<float>(H),
+				static_cast<float>(tlR) * S, static_cast<float>(trR) * S, static_cast<float>(brR) * S, static_cast<float>(blR) * S);
 		}
 	}
-	RaisedShade(lit, BW, BH, 1.0f, shade);
+	RaisedShade(lit, BW, BH, S, shade);
 
 	cairo_surface_t* image = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, BW, BH);
 	if (cairo_surface_status(image) != CAIRO_STATUS_SUCCESS) {
@@ -360,6 +364,7 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 	}
 	cairo_surface_mark_dirty(image);
 	cairo_save(cr);
+	cairo_identity_matrix(cr);
 	cairo_set_source_surface(cr, image, bx0, by0);
 	cairo_paint(cr);
 	cairo_restore(cr);
@@ -553,8 +558,7 @@ void Paint(Popup* p)
 	});
 	if (buffer == nullptr)
 		return;
-	wl_surface_attach(p->surface, buffer, 0, 0);
-	wl_surface_damage_buffer(p->surface, 0, 0, p->width, p->height);
+	AttachBuffer(p->surface, buffer, p->width, p->height);
 	wl_surface_commit(p->surface);
 }
 
@@ -623,6 +627,7 @@ void Create(Popup* p, Popup* parent, int x, int y, int w, int h, uint32_t anchor
 	uint32_t constraints)
 {
 	p->surface = wl_compositor_create_surface(gWl.compositor);
+	ScaleTrackSurface(p->surface);
 	p->xdgSurface = xdg_wm_base_get_xdg_surface(gWl.wmBase, p->surface);
 	xdg_surface_add_listener(p->xdgSurface, &kXdgSurfaceListener, p);
 	xdg_positioner* positioner = xdg_wm_base_create_positioner(gWl.wmBase);
@@ -653,8 +658,10 @@ void Destroy(Popup* p)
 		xdg_popup_destroy(p->popup);
 	if (p->xdgSurface != nullptr)
 		xdg_surface_destroy(p->xdgSurface);
-	if (p->surface != nullptr)
+	if (p->surface != nullptr) {
+		ScaleForgetSurface(p->surface);
 		wl_surface_destroy(p->surface);
+	}
 	if (gOver == p)
 		gOver = nullptr;
 }

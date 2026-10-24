@@ -8,6 +8,10 @@
 
 #include "icons.h"
 
+#include <cmath>
+
+#include "scale.h"
+
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gio/gio.h>
 #include <librsvg/rsvg.h>
@@ -479,6 +483,7 @@ IconRef CachedIcon(const std::string& name, int px, const std::string& extraDir)
 	static std::map<std::string, IconRef> cache;
 	if (name.empty() || px <= 0)
 		return nullptr;
+	px = static_cast<int>(std::lround(px * RenderScale()));		// (the drawing scales it back down to the logical size)
 	const std::string key = name + "@" + std::to_string(px) + "@" + extraDir;
 	auto found = cache.find(key);
 	if (found != cache.end())

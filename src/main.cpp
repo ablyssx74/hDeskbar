@@ -39,6 +39,8 @@
 #include "icons.h"
 #include "leaf.h"
 #include "loop.h"
+#include "scale.h"
+#include "shm.h"
 #include "menu.h"
 #include "settings.h"
 #include "style.h"
@@ -711,32 +713,7 @@ const wl_buffer_listener kBufferListener = { BufferRelease };
 
 wl_buffer* MakeBuffer(const Layout& layout)
 {
-	const int width = layout.width, height = layout.height;
-	const int stride = width * 4;
-	const int size = stride * height;
-	int fd = memfd_create("hdeskbar", MFD_CLOEXEC);
-	if (fd < 0 || ftruncate(fd, size) < 0)
-		return nullptr;
-	void* data = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-	if (data == MAP_FAILED) {
-		close(fd);
-		return nullptr;
-	}
-	cairo_surface_t* surface = cairo_image_surface_create_for_data(
-		static_cast<unsigned char*>(data), CAIRO_FORMAT_ARGB32, width, height, stride);
-	cairo_t* cr = cairo_create(surface);
-	Draw(cr, layout);
-	cairo_destroy(cr);
-	cairo_surface_flush(surface);
-	cairo_surface_destroy(surface);
-
-	wl_shm_pool* pool = wl_shm_create_pool(gApp.shm, fd, size);
-	wl_buffer* buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride, WL_SHM_FORMAT_ARGB8888);
-	wl_shm_pool_destroy(pool);
-	wl_buffer_add_listener(buffer, &kBufferListener, nullptr);
-	munmap(data, size);
-	close(fd);
-	return buffer;
+	return NewShmBuffer(layout.width, layout.height, [&layout](cairo_t* cr) { Draw(cr, layout); });
 }
 
 Layout gLayout;
@@ -757,8 +734,7 @@ void Present()
 	wl_buffer* buffer = MakeBuffer(layout);
 	if (buffer == nullptr)
 		return;
-	wl_surface_attach(gApp.surface, buffer, 0, 0);
-	wl_surface_damage_buffer(gApp.surface, 0, 0, layout.width, layout.height);
+	AttachBuffer(gApp.surface, buffer, layout.width, layout.height);
 	wl_surface_commit(gApp.surface);
 }
 
@@ -1275,12 +1251,14 @@ void OutputMode(void*, wl_output*, uint32_t flags, int32_t, int32_t height, int3
 		gApp.outputHeight = height;
 }
 void OutputDone(void*, wl_output*) {}
-void OutputScale(void*, wl_output*, int32_t) {}
+void OutputScale(void*, wl_output*, int32_t scale) { ScaleSetOutput(scale); }
 
 const wl_output_listener kOutputListener = { OutputGeometry, OutputMode, OutputDone, OutputScale, nullptr, nullptr };
 
 void RegistryGlobal(void*, wl_registry* registry, uint32_t name, const char* interface, uint32_t version)
 {
+	if (ScaleBindGlobal(registry, name, interface))
+		return;
 	if (strcmp(interface, wl_compositor_interface.name) == 0)
 		gApp.compositor = static_cast<wl_compositor*>(wl_registry_bind(registry, name, &wl_compositor_interface, 4));
 	else if (strcmp(interface, wl_shm_interface.name) == 0)
@@ -1442,6 +1420,7 @@ int main(int argc, char** argv)
 	gWl.seat = gApp.seat;
 	gWl.screenHeight = gApp.outputHeight;
 	gApp.surface = wl_compositor_create_surface(gApp.compositor);
+	ScaleTrackSurface(gApp.surface);
 	gWl.barSurface = gApp.surface;
 	gApp.layerSurface = zwlr_layer_shell_v1_get_layer_surface(gApp.layerShell, gApp.surface, nullptr,
 		ZWLR_LAYER_SHELL_V1_LAYER_TOP, "hdeskbar");
@@ -1454,6 +1433,7 @@ int main(int argc, char** argv)
 	gApp.loop = g_main_loop_new(nullptr, FALSE);
 	AttachWaylandSource(gApp.display, []() { g_main_loop_quit(gApp.loop); });
 	gOnSettingsChanged = SettingsChanged;
+	ScaleOnChanged([]() { Redraw(); });
 	if (gSettings.showTray) {
 		gTrayStarted = true;
 		gTray.onChanged = []() { Redraw(); };

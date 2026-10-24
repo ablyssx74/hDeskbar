@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "loop.h"
+#include "scale.h"
 #include "shm.h"
 #include "style.h"
 #include "wl.h"
@@ -106,8 +107,7 @@ void Paint(Alert* a)
 	});
 	if (buffer == nullptr)
 		return;
-	wl_surface_attach(a->surface, buffer, 0, 0);
-	wl_surface_damage_buffer(a->surface, 0, 0, kWidth, a->height);
+	AttachBuffer(a->surface, buffer, kWidth, a->height);
 	wl_surface_commit(a->surface);
 }
 
@@ -119,8 +119,10 @@ void Remove(Alert* a)
 		xdg_toplevel_destroy(a->toplevel);
 	if (a->xdgSurface != nullptr)
 		xdg_surface_destroy(a->xdgSurface);
-	if (a->surface != nullptr)
+	if (a->surface != nullptr) {
+		ScaleForgetSurface(a->surface);
 		wl_surface_destroy(a->surface);
+	}
 	for (auto it = gAlerts.begin(); it != gAlerts.end(); ++it) {
 		if (it->get() == a) {
 			gAlerts.erase(it);
@@ -189,6 +191,7 @@ void ShowAlert(const std::string& title, const std::string& text, std::vector<st
 		a->height = 50 + h + 24 + kButtonHeight + 20;
 	}
 	a->surface = wl_compositor_create_surface(gWl.compositor);
+	ScaleTrackSurface(a->surface);
 	a->xdgSurface = xdg_wm_base_get_xdg_surface(gWl.wmBase, a->surface);
 	xdg_surface_add_listener(a->xdgSurface, &kXdgSurfaceListener, a);
 	a->toplevel = xdg_surface_get_toplevel(a->xdgSurface);

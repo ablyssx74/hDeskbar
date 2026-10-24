@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "loop.h"
+#include "scale.h"
 #include "shm.h"
 #include "style.h"
 #include "wl.h"
@@ -59,8 +60,7 @@ void Paint(Tip* tip)
 	});
 	if (buffer == nullptr)
 		return;
-	wl_surface_attach(tip->surface, buffer, 0, 0);
-	wl_surface_damage_buffer(tip->surface, 0, 0, tip->width, tip->height);
+	AttachBuffer(tip->surface, buffer, tip->width, tip->height);
 	wl_surface_commit(tip->surface);
 }
 
@@ -103,6 +103,7 @@ void ShowTooltip(const std::string& text, int x, int y, int w, int h, bool above
 		tip->width = textWidth + tip->height;		// a capsule: room for the round ends
 	}
 	tip->surface = wl_compositor_create_surface(gWl.compositor);
+	ScaleTrackSurface(tip->surface);
 	// no input: the pointer is over the bar, and stays that way
 	wl_region* none = wl_compositor_create_region(gWl.compositor);
 	wl_surface_set_input_region(tip->surface, none);
@@ -132,8 +133,10 @@ void HideTooltip()
 		xdg_popup_destroy(gTip->popup);
 	if (gTip->xdgSurface != nullptr)
 		xdg_surface_destroy(gTip->xdgSurface);
-	if (gTip->surface != nullptr)
+	if (gTip->surface != nullptr) {
+		ScaleForgetSurface(gTip->surface);
 		wl_surface_destroy(gTip->surface);
+	}
 	gTip.reset();
 }
 
