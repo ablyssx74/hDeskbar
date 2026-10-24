@@ -35,9 +35,11 @@
 #include "loop.h"
 #include "tray.h"
 #include "util.h"
+#include "volume.h"
 #include "xdg-shell-client-protocol.h"
 
 SystemTray gTray;
+VolumeControl gVolume;
 
 namespace {
 
@@ -73,6 +75,9 @@ struct App {
 	wl_pointer* pointer = nullptr;
 	GMainLoop* loop = nullptr;
 	bool showTray = true;
+	bool showVolume = true;
+	bool volumeDrag = false;
+	bool volumeMute = false;	// the press began on the speaker
 	bool clickFirst = false;
 	bool redrawQueued = false;
 	double pointerX = -1, pointerY = -1;
@@ -107,12 +112,15 @@ struct TrayCell {
 // Where everything is: worked out from the size of the bar and from what is in the tray, for drawing and for the pointer.
 struct Layout {
 	int width = 0, height = 0;		// what the bar needs (a horizontal bar's width is the screen's)
-	Rect header, graph, clock;
+	Rect header, graph, clock, volume;
 	std::vector<TrayCell> cells;
 };
 
 constexpr int kCell = 22;				// a tray icon's cell
 constexpr int kTrayIcon = 16;
+constexpr int kVolumeRow = 20;			// the row of the volume slider in a vertical bar
+constexpr int kVolumeWidth = 84;		// and its width in a horizontal one
+constexpr int kSpeakerWidth = 20;		// the speaker at the slider's left end: it mutes
 constexpr int kHorizontalHeight = 26;
 
 Layout MakeLayout(int width, int height)
@@ -126,10 +134,15 @@ Layout MakeLayout(int width, int height)
 		layout.graph = { 7, 1.0 + kHeaderHeight + 3, kGraphWidth, kRowHeight - 6.0 };
 		const int columns = std::max(1, (width - 10) / kCell);
 		const int rows = (static_cast<int>(items.size()) + columns - 1) / columns;
-		const double top = 1.0 + kHeaderHeight + kRowHeight + 2;
+		double top = 1.0 + kHeaderHeight + kRowHeight + 2;
+		if (gApp.showVolume) {
+			layout.volume = { 5, top, width - 10.0, kVolumeRow - 2.0 };
+			top += kVolumeRow;
+		}
 		for (size_t i = 0; i < items.size(); i++)
 			layout.cells.push_back({ items[i], { 5.0 + (i % columns) * kCell, top + (i / columns) * kCell, kCell, kCell } });
-		layout.height = 1 + kHeaderHeight + kRowHeight + (rows > 0 ? 2 + rows * kCell + 2 : 0) + 1;
+		layout.height = 1 + kHeaderHeight + kRowHeight + (gApp.showVolume ? 2 + kVolumeRow : 0)
+			+ (rows > 0 ? 2 + rows * kCell + 2 : 0) + 1;
 	} else {
 		layout.height = kHorizontalHeight;
 		layout.width = width;
@@ -140,6 +153,10 @@ Layout MakeLayout(int width, int height)
 		for (size_t i = 0; i < items.size(); i++) {
 			layout.cells.push_back({ items[i], { layout.graph.x - 6.0 - (items.size() - i) * kCell,
 				(kHorizontalHeight - kCell) / 2.0, kCell, kCell } });
+		}
+		if (gApp.showVolume) {
+			const double left = layout.cells.empty() ? layout.graph.x : layout.cells[0].cell.x;
+			layout.volume = { left - 8.0 - kVolumeWidth, (kHorizontalHeight - 18) / 2.0, kVolumeWidth, 18 };
 		}
 	}
 	return layout;
@@ -241,6 +258,83 @@ void DrawClock(cairo_t* cr, double x, double y, double w, double h)
 	g_object_unref(layout);
 }
 
+// The volume, as the Haiku Deskbar has it: a speaker (it mutes), and a slider with a sunken groove and a small raised knob.
+void DrawVolume(cairo_t* cr, const Rect& r)
+{
+	const bool muted = gVolume.muted || !gVolume.ready;
+	const double level = gVolume.level;
+
+	// the speaker: a box, a cone, and waves (or a bar across it, when muted)
+	const double sx = r.x + 3, sy = r.y + r.h / 2;
+	cairo_set_source_rgba(cr, kOutline.r, kOutline.g, kOutline.b, muted ? 0.55 : 0.85);
+	cairo_move_to(cr, sx, sy - 2.5);
+	cairo_line_to(cr, sx + 3, sy - 2.5);
+	cairo_line_to(cr, sx + 7, sy - 6);
+	cairo_line_to(cr, sx + 7, sy + 6);
+	cairo_line_to(cr, sx + 3, sy + 2.5);
+	cairo_line_to(cr, sx, sy + 2.5);
+	cairo_close_path(cr);
+	cairo_fill(cr);
+	cairo_set_line_width(cr, 1.2);
+	if (muted) {
+		cairo_move_to(cr, sx + 9, sy - 3.5);
+		cairo_line_to(cr, sx + 14, sy + 3.5);
+		cairo_move_to(cr, sx + 14, sy - 3.5);
+		cairo_line_to(cr, sx + 9, sy + 3.5);
+		cairo_stroke(cr);
+	} else {
+		cairo_arc(cr, sx + 7, sy, 4, -M_PI / 3, M_PI / 3);
+		cairo_stroke(cr);
+		if (level > 0.5) {
+			cairo_arc(cr, sx + 7, sy, 7, -M_PI / 3, M_PI / 3);
+			cairo_stroke(cr);
+		}
+	}
+
+	// the groove, sunk into the panel, and the part of it that is filled
+	const double left = r.x + kSpeakerWidth + 2, right = r.x + r.w - 5, mid = r.y + r.h / 2;
+	const double grooveTop = mid - 2.5, grooveHeight = 5;
+	RoundedRectPath(cr, left - 1, grooveTop + 1, right - left + 2, grooveHeight, 2.5, 2.5, 2.5, 2.5);
+	cairo_set_source_rgba(cr, 1, 1, 1, 0.65);	// the light edge under the groove
+	cairo_fill(cr);
+	RoundedRectPath(cr, left - 1, grooveTop, right - left + 2, grooveHeight, 2.5, 2.5, 2.5, 2.5);
+	cairo_set_source_rgb(cr, 0.46, 0.47, 0.58);
+	cairo_fill(cr);
+	const double knobX = left + std::clamp(level, 0.0, 1.0) * (right - left);
+	if (knobX > left) {
+		cairo_save(cr);
+		RoundedRectPath(cr, left - 1, grooveTop, knobX - left + 1, grooveHeight, 2.5, 2.5, 2.5, 2.5);
+		cairo_clip(cr);
+		const Color fill = muted ? Color{0.62, 0.62, 0.68} : kAccent;
+		cairo_set_source_rgb(cr, fill.r, fill.g, fill.b);
+		cairo_paint(cr);
+		cairo_restore(cr);
+	}
+	// a dark line along the top of the groove, as it is sunk
+	cairo_set_line_width(cr, 1);
+	cairo_move_to(cr, left + 1.5, grooveTop + 0.5);
+	cairo_line_to(cr, right - 1.5, grooveTop + 0.5);
+	cairo_set_source_rgba(cr, 0, 0, 0, 0.30);
+	cairo_stroke(cr);
+
+	// the knob: a small raised button
+	const double knobW = 8, knobH = 14;
+	const double kx = knobX - knobW / 2, ky = mid - knobH / 2;
+	RoundedRectPath(cr, kx, ky + 1, knobW, knobH, 3, 3, 3, 3);
+	cairo_set_source_rgba(cr, 0, 0, 0, 0.18);
+	cairo_fill(cr);
+	cairo_pattern_t* gradient = cairo_pattern_create_linear(0, ky, 0, ky + knobH);
+	cairo_pattern_add_color_stop_rgb(gradient, 0, 0.98, 0.98, 1.0);
+	cairo_pattern_add_color_stop_rgb(gradient, 1, 0.78, 0.79, 0.88);
+	RoundedRectPath(cr, kx, ky, knobW, knobH, 3, 3, 3, 3);
+	cairo_set_source(cr, gradient);
+	cairo_fill(cr);
+	cairo_pattern_destroy(gradient);
+	RoundedRectPath(cr, kx + 0.5, ky + 0.5, knobW - 1, knobH - 1, 2.5, 2.5, 2.5, 2.5);
+	cairo_set_source_rgba(cr, kOutline.r, kOutline.g, kOutline.b, muted ? 0.45 : 0.75);
+	cairo_stroke(cr);
+}
+
 // The tray's icons, each in its cell, the one under the pointer lit.
 void DrawTray(cairo_t* cr, const Layout& layout)
 {
@@ -314,6 +408,8 @@ void Draw(cairo_t* cr, const Layout& layout)
 	DrawClock(cr, layout.clock.x, layout.clock.y, layout.clock.w, layout.clock.h);
 	if (gApp.showCpu)
 		DrawCpuGraph(cr, layout.graph.x, layout.graph.y, layout.graph.w, layout.graph.h);
+	if (gApp.showVolume)
+		DrawVolume(cr, layout.volume);
 	DrawTray(cr, layout);
 }
 
@@ -415,11 +511,22 @@ void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface*)
 	Redraw();
 }
 
+// The level the pointer's place on the slider stands for.
+double VolumeAt(double x)
+{
+	const double left = gLayout.volume.x + kSpeakerWidth + 2, right = gLayout.volume.x + gLayout.volume.w - 5;
+	return std::clamp((x - left) / (right - left), 0.0, 1.0);
+}
+
 void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 {
 	const double oldX = gApp.pointerX, oldY = gApp.pointerY;
 	gApp.pointerX = wl_fixed_to_double(x);
 	gApp.pointerY = wl_fixed_to_double(y);
+	if (gApp.volumeDrag) {
+		gVolume.SetLevel(static_cast<float>(VolumeAt(gApp.pointerX)));
+		return;
+	}
 	// (only a move from one cell to another needs a new picture)
 	if (CellAt(oldX, oldY) != CellAt(gApp.pointerX, gApp.pointerY))
 		Redraw();
@@ -439,6 +546,25 @@ void ClickCell(TrayCell* cell, uint32_t button)
 
 void PointerButton(void*, wl_pointer*, uint32_t, uint32_t, uint32_t button, uint32_t state)
 {
+	// the volume: a press on the slider sets the level and drags it; a click on the speaker mutes
+	if (gApp.showVolume && button == BTN_LEFT) {
+		if (state == WL_POINTER_BUTTON_STATE_PRESSED && gLayout.volume.Contains(gApp.pointerX, gApp.pointerY)) {
+			if (gApp.pointerX < gLayout.volume.x + kSpeakerWidth) {
+				gApp.volumeMute = true;
+			} else {
+				gApp.volumeDrag = true;
+				gVolume.SetLevel(static_cast<float>(VolumeAt(gApp.pointerX)));
+			}
+			return;
+		}
+		if (state == WL_POINTER_BUTTON_STATE_RELEASED && (gApp.volumeDrag || gApp.volumeMute)) {
+			if (gApp.volumeMute && gApp.pointerX < gLayout.volume.x + kSpeakerWidth
+				&& gLayout.volume.Contains(gApp.pointerX, gApp.pointerY))
+				gVolume.SetMuted(!gVolume.muted);
+			gApp.volumeDrag = gApp.volumeMute = false;
+			return;
+		}
+	}
 	if (state != WL_POINTER_BUTTON_STATE_RELEASED)
 		return;
 	TrayCell* cell = CellAt(gApp.pointerX, gApp.pointerY);
@@ -446,7 +572,14 @@ void PointerButton(void*, wl_pointer*, uint32_t, uint32_t, uint32_t button, uint
 		ClickCell(cell, button);
 }
 
-void PointerAxis(void*, wl_pointer*, uint32_t, uint32_t, wl_fixed_t) {}
+// The wheel over the slider changes the volume, two percent a notch.
+void PointerAxis(void*, wl_pointer*, uint32_t, uint32_t axis, wl_fixed_t value)
+{
+	if (!gApp.showVolume || axis != WL_POINTER_AXIS_VERTICAL_SCROLL || !gLayout.volume.Contains(gApp.pointerX, gApp.pointerY))
+		return;
+	const double notches = wl_fixed_to_double(value) / 10.0;
+	gVolume.SetLevel(gVolume.level - static_cast<float>(notches) * 0.02f);
+}
 void PointerFrame(void*, wl_pointer*) {}
 void PointerAxisSource(void*, wl_pointer*, uint32_t) {}
 void PointerAxisStop(void*, wl_pointer*, uint32_t, uint32_t) {}
@@ -528,7 +661,7 @@ bool ParsePlacement(const std::string& name, Placement* placement)
 
 void Usage(const char* program)
 {
-	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu] [--no-tray]\n", program);
+	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu] [--no-tray] [--no-volume]\n", program);
 }
 
 }	// namespace
@@ -543,6 +676,8 @@ int main(int argc, char** argv)
 			}
 		} else if (strcmp(argv[i], "--no-cpu") == 0) {
 			gApp.showCpu = false;
+		} else if (strcmp(argv[i], "--no-volume") == 0) {
+			gApp.showVolume = false;
 		} else if (strcmp(argv[i], "--no-tray") == 0) {
 			gApp.showTray = false;
 		} else if (strcmp(argv[i], "--click-first-tray-icon") == 0) {
@@ -605,6 +740,10 @@ int main(int argc, char** argv)
 	if (gApp.showTray) {
 		gTray.onChanged = []() { Redraw(); };
 		gTray.Init();
+	}
+	if (gApp.showVolume) {
+		gVolume.onChanged = []() { Redraw(); };
+		gVolume.Init();
 	}
 	gApp.cpu.Sample();
 	static int shownMinute = -1;

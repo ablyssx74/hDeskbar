@@ -3,7 +3,7 @@
 #   make                build ./hdeskbar
 #   sudo make install   install into $(PREFIX) (default /usr)
 #
-# Requires (Arch / CachyOS package names): wayland cairo pango librsvg
+# Requires (Arch / CachyOS package names): wayland cairo pango librsvg libpulse
 
 CXX      ?= g++
 PREFIX   ?= /usr
@@ -15,7 +15,7 @@ GEN_DIR   = build
 
 PROTOCOLS = xdg-shell wlr-layer-shell-unstable-v1
 
-PKGS = wayland-client cairo pangocairo librsvg-2.0 gdk-pixbuf-2.0 gio-unix-2.0
+PKGS = wayland-client cairo pangocairo librsvg-2.0 gdk-pixbuf-2.0 gio-unix-2.0 libpulse libpulse-mainloop-glib
 
 PROTO_HEADERS = $(patsubst %,$(GEN_DIR)/%-client-protocol.h,$(PROTOCOLS))
 PROTO_SOURCES = $(patsubst %,$(GEN_DIR)/%-protocol.c,$(PROTOCOLS))
