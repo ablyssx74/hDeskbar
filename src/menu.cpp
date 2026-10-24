@@ -725,7 +725,7 @@ void OpenMenu(std::vector<MenuItem> items, const MenuAnchor& anchor)
 		raw->trailSide = -anchor.side;
 		Create(raw, nullptr, anchor.x, anchor.y, anchor.w, anchor.h,
 			left ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_TOP_RIGHT,
-			left ? XDG_POSITIONER_GRAVITY_BOTTOM_LEFT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, 0, 0,
+			left ? XDG_POSITIONER_GRAVITY_BOTTOM_LEFT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, -anchor.side * 5, 0,		// (over the bar's edge)
 			XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y);
 		return;
 	}
