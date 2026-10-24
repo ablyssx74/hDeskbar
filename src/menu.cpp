@@ -33,7 +33,7 @@ struct Popup {
 	int width = 0, height = 0;		// the size of the surface
 	int scroll = 0;
 	int hover = -1;
-	bool hasIcons = false;
+	bool hasIcons = false, hasChecks = false;
 	bool configured = false;
 	Popup* parent = nullptr;
 	int parentRow = -1;
@@ -72,11 +72,13 @@ void LayOut(Popup* p)
 		y += item.separator ? kSeparator : kRow;
 		if (!item.separator)
 			widest = std::max(widest, MeasureLabel(item.label));
-		if (!item.iconName.empty())
+		if (!item.iconName.empty() || item.icon)
 			p->hasIcons = true;
+		if (item.check != kCheckNone)
+			p->hasChecks = true;
 	}
 	p->content = y;
-	p->width = static_cast<int>(std::ceil(widest)) + 8 + (p->hasIcons ? 24 : 4) + 26;
+	p->width = static_cast<int>(std::ceil(widest)) + 8 + (p->hasIcons ? 24 : 4) + (p->hasChecks ? 16 : 0) + 26;
 	p->width = std::clamp(p->width, 150, 420);
 	const int most = (gWl.screenHeight > 0 ? gWl.screenHeight : 700) - 40;
 	p->height = std::min(p->content + 2 * kPad, std::max(most, 100));
@@ -134,11 +136,35 @@ void Paint(Popup* p)
 				cairo_pattern_destroy(raised);
 			}
 			const double alpha = item.enabled ? 1.0 : 0.45;
-			if (!item.iconName.empty()) {
-				IconRef icon = CachedIcon(item.iconName, kIconSize);
-				if (icon) {
+			const double checkWidth = p->hasChecks ? 16 : 0;
+			if (item.check != kCheckNone) {
+				// a mark for a checked item, a dot for the chosen one of a set
+				const bool on = item.check == kCheckOn || item.check == kRadioOn;
+				if (on) {
+					if (lit)
+						cairo_set_source_rgb(cr, 1, 1, 1);
+					else
+						cairo_set_source_rgba(cr, 0.10, 0.10, 0.16, alpha);
+					if (item.check == kCheckOn) {
+						cairo_set_line_width(cr, 1.8);
+						cairo_move_to(cr, 8, y + kRow / 2.0);
+						cairo_line_to(cr, 11, y + kRow / 2.0 + 3);
+						cairo_line_to(cr, 16, y + kRow / 2.0 - 4);
+						cairo_stroke(cr);
+					} else {
+						cairo_new_path(cr);
+						cairo_arc(cr, 12, y + kRow / 2.0, 3, 0, 2 * M_PI);
+						cairo_fill(cr);
+					}
+				}
+			}
+			IconRef icon = item.icon;
+			if (!icon && !item.iconName.empty())
+				icon = CachedIcon(item.iconName, kIconSize);
+			if (icon) {
+				{
 					cairo_save(cr);
-					cairo_translate(cr, 10, y + (kRow - kIconSize) / 2.0);
+					cairo_translate(cr, 10 + checkWidth, y + (kRow - kIconSize) / 2.0);
 					cairo_scale(cr, kIconSize / static_cast<double>(cairo_image_surface_get_width(icon.get())),
 						kIconSize / static_cast<double>(cairo_image_surface_get_height(icon.get())));
 					cairo_set_source_surface(cr, icon.get(), 0, 0);
@@ -146,7 +172,7 @@ void Paint(Popup* p)
 					cairo_restore(cr);
 				}
 			}
-			const double textX = p->hasIcons ? 34 : 12;
+			const double textX = (p->hasIcons ? 34 : 12) + checkWidth;
 			PangoLayout* layout = pango_cairo_create_layout(cr);
 			PangoFontDescription* font = pango_font_description_from_string("Sans 9");
 			pango_layout_set_font_description(layout, font);

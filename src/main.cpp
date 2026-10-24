@@ -79,8 +79,6 @@ struct App {
 	wl_pointer* pointer = nullptr;
 	GMainLoop* loop = nullptr;
 	int hoverTab = -1, hoverRow = -1;
-	bool volumeDrag = false;
-	bool volumeMute = false;	// the press began on the speaker
 	bool clickFirst = false;
 	std::string debugClick, debugSubmenus, debugSettings;
 	Placement shownPlacement = Placement::TopRight;
@@ -207,9 +205,6 @@ constexpr int kCell = 22;				// a tray icon's cell
 constexpr int kTrayIcon = 16;
 constexpr int kTabHeight = 24;			// a program's tab
 constexpr int kWindowRow = 20;			// a window, under its program's tab
-constexpr int kVolumeRow = 20;			// the row of the volume slider in a vertical bar
-constexpr int kVolumeWidth = 84;		// and its width in a horizontal one
-constexpr int kSpeakerWidth = 20;		// the speaker at the slider's left end: it mutes
 constexpr int kHorizontalHeight = 26;
 constexpr int kVerticalWidth = 150;
 
@@ -238,17 +233,19 @@ Layout MakeLayout(int width, int height)
 		layout.header = { 1, 1, width - 2.0, kHeaderHeight };
 		layout.clock = { 1, 1.0 + kHeaderHeight, width - 2.0, kRowHeight };
 		layout.graph = { 7, 1.0 + kHeaderHeight + 3, kGraphWidth, kRowHeight - 6.0 };
+		// the icons: the speaker first, then the tray's, a row of them after another
 		const int columns = std::max(1, (width - 10) / kCell);
-		const int rows = (static_cast<int>(items.size()) + columns - 1) / columns;
-		double top = 1.0 + kHeaderHeight + kRowHeight + 2;
+		const int count = static_cast<int>(items.size()) + (gSettings.showVolume ? 1 : 0);
+		const int rows = (count + columns - 1) / columns;
+		const double top = 1.0 + kHeaderHeight + kRowHeight + 2;
+		int slot = 0;
 		if (gSettings.showVolume) {
-			layout.volume = { 5, top, width - 10.0, kVolumeRow - 2.0 };
-			top += kVolumeRow;
+			layout.volume = { 5.0, top, kCell, kCell };
+			slot++;
 		}
-		for (size_t i = 0; i < items.size(); i++)
-			layout.cells.push_back({ items[i], { 5.0 + (i % columns) * kCell, top + (i / columns) * kCell, kCell, kCell } });
-		double y = 1.0 + kHeaderHeight + kRowHeight + (gSettings.showVolume ? 2 + kVolumeRow : 0)
-			+ (rows > 0 ? 2 + rows * kCell + 2 : 0);
+		for (size_t i = 0; i < items.size(); i++, slot++)
+			layout.cells.push_back({ items[i], { 5.0 + (slot % columns) * kCell, top + (slot / columns) * kCell, kCell, kCell } });
+		double y = 1.0 + kHeaderHeight + kRowHeight + (rows > 0 ? 2 + rows * kCell + 2 : 0);
 		// the tabs: a program's tab, and under it, when it is open, the dark box with its windows. At the edge of the screen
 		// they run flush, and are round at the other end.
 		layout.teams = BuildTeams();
@@ -286,7 +283,7 @@ Layout MakeLayout(int width, int height)
 		}
 		double right = layout.cells.empty() ? layout.graph.x : layout.cells[0].cell.x;
 		if (gSettings.showVolume) {
-			layout.volume = { right - 8.0 - kVolumeWidth, (kHorizontalHeight - 18) / 2.0, kVolumeWidth, 18 };
+			layout.volume = { right - 6.0 - kCell, (kHorizontalHeight - kCell) / 2.0, kCell, kCell };
 			right = layout.volume.x;
 		}
 		// the tabs, side by side after the header, as far as there is room
@@ -380,14 +377,32 @@ void DrawClock(cairo_t* cr, double x, double y, double w, double h)
 	g_object_unref(layout);
 }
 
-// The volume, as the Haiku Deskbar has it: a speaker (it mutes), and a slider with a sunken groove and a small raised knob.
+// The volume: a speaker, with waves for how loud it is (a cross when it is muted). It is the icon of the theme when there is one.
 void DrawVolume(cairo_t* cr, const Rect& r)
 {
 	const bool muted = gVolume.muted || !gVolume.ready;
 	const double level = gVolume.level;
-
-	// the speaker: a box, a cone, and waves (or a bar across it, when muted)
-	const double sx = r.x + 3, sy = r.y + r.h / 2;
+	if (r.Contains(gApp.pointerX, gApp.pointerY)) {
+		RoundedRectPath(cr, r.x, r.y, r.w, r.h, 4, 4, 4, 4);
+		cairo_set_source_rgba(cr, kAccent.r, kAccent.g, kAccent.b, 0.30);
+		cairo_fill(cr);
+	}
+	const char* name = muted ? "audio-volume-muted" : (level < 0.34 ? "audio-volume-low"
+		: (level < 0.67 ? "audio-volume-medium" : "audio-volume-high"));
+	IconRef icon = CachedIcon(name, kTrayIcon);
+	if (icon) {
+		const double width = cairo_image_surface_get_width(icon.get()), height = cairo_image_surface_get_height(icon.get());
+		cairo_save(cr);
+		cairo_translate(cr, r.x + (r.w - kTrayIcon) / 2, r.y + (r.h - kTrayIcon) / 2);
+		cairo_scale(cr, kTrayIcon / width, kTrayIcon / height);
+		cairo_set_source_surface(cr, icon.get(), 0, 0);
+		cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BEST);
+		cairo_paint(cr);
+		cairo_restore(cr);
+		return;
+	}
+	// no icon in the theme: a speaker drawn here
+	const double sx = r.x + 4, sy = r.y + r.h / 2;
 	cairo_set_source_rgba(cr, kOutline.r, kOutline.g, kOutline.b, muted ? 0.55 : 0.85);
 	cairo_move_to(cr, sx, sy - 2.5);
 	cairo_line_to(cr, sx + 3, sy - 2.5);
@@ -405,56 +420,15 @@ void DrawVolume(cairo_t* cr, const Rect& r)
 		cairo_line_to(cr, sx + 9, sy + 3.5);
 		cairo_stroke(cr);
 	} else {
+		cairo_new_path(cr);
 		cairo_arc(cr, sx + 7, sy, 4, -M_PI / 3, M_PI / 3);
 		cairo_stroke(cr);
 		if (level > 0.5) {
+			cairo_new_path(cr);
 			cairo_arc(cr, sx + 7, sy, 7, -M_PI / 3, M_PI / 3);
 			cairo_stroke(cr);
 		}
 	}
-
-	// the groove, sunk into the panel, and the part of it that is filled
-	const double left = r.x + kSpeakerWidth + 2, right = r.x + r.w - 5, mid = r.y + r.h / 2;
-	const double grooveTop = mid - 2.5, grooveHeight = 5;
-	RoundedRectPath(cr, left - 1, grooveTop + 1, right - left + 2, grooveHeight, 2.5, 2.5, 2.5, 2.5);
-	cairo_set_source_rgba(cr, 1, 1, 1, 0.65);	// the light edge under the groove
-	cairo_fill(cr);
-	RoundedRectPath(cr, left - 1, grooveTop, right - left + 2, grooveHeight, 2.5, 2.5, 2.5, 2.5);
-	cairo_set_source_rgb(cr, 0.46, 0.47, 0.58);
-	cairo_fill(cr);
-	const double knobX = left + std::clamp(level, 0.0, 1.0) * (right - left);
-	if (knobX > left) {
-		cairo_save(cr);
-		RoundedRectPath(cr, left - 1, grooveTop, knobX - left + 1, grooveHeight, 2.5, 2.5, 2.5, 2.5);
-		cairo_clip(cr);
-		const Color fill = muted ? Color{0.62, 0.62, 0.68} : kAccent;
-		cairo_set_source_rgb(cr, fill.r, fill.g, fill.b);
-		cairo_paint(cr);
-		cairo_restore(cr);
-	}
-	// a dark line along the top of the groove, as it is sunk
-	cairo_set_line_width(cr, 1);
-	cairo_move_to(cr, left + 1.5, grooveTop + 0.5);
-	cairo_line_to(cr, right - 1.5, grooveTop + 0.5);
-	cairo_set_source_rgba(cr, 0, 0, 0, 0.30);
-	cairo_stroke(cr);
-
-	// the knob: a small raised button
-	const double knobW = 8, knobH = 14;
-	const double kx = knobX - knobW / 2, ky = mid - knobH / 2;
-	RoundedRectPath(cr, kx, ky + 1, knobW, knobH, 3, 3, 3, 3);
-	cairo_set_source_rgba(cr, 0, 0, 0, 0.18);
-	cairo_fill(cr);
-	cairo_pattern_t* gradient = cairo_pattern_create_linear(0, ky, 0, ky + knobH);
-	cairo_pattern_add_color_stop_rgb(gradient, 0, 0.98, 0.98, 1.0);
-	cairo_pattern_add_color_stop_rgb(gradient, 1, 0.78, 0.79, 0.88);
-	RoundedRectPath(cr, kx, ky, knobW, knobH, 3, 3, 3, 3);
-	cairo_set_source(cr, gradient);
-	cairo_fill(cr);
-	cairo_pattern_destroy(gradient);
-	RoundedRectPath(cr, kx + 0.5, ky + 0.5, knobW - 1, knobH - 1, 2.5, 2.5, 2.5, 2.5);
-	cairo_set_source_rgba(cr, kOutline.r, kOutline.g, kOutline.b, muted ? 0.45 : 0.75);
-	cairo_stroke(cr);
 }
 
 // ---- drawing the tabs ----
@@ -850,13 +824,6 @@ void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface* surface)
 	Redraw();
 }
 
-// The level the pointer's place on the slider stands for.
-double VolumeAt(double x)
-{
-	const double left = gLayout.volume.x + kSpeakerWidth + 2, right = gLayout.volume.x + gLayout.volume.w - 5;
-	return std::clamp((x - left) / (right - left), 0.0, 1.0);
-}
-
 void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 {
 	if (gWl.pointerSurface != gApp.surface) {
@@ -869,13 +836,11 @@ void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 	const double oldX = gApp.pointerX, oldY = gApp.pointerY;
 	gApp.pointerX = wl_fixed_to_double(x);
 	gApp.pointerY = wl_fixed_to_double(y);
-	if (gApp.volumeDrag) {
-		gVolume.SetLevel(static_cast<float>(VolumeAt(gApp.pointerX)));
-		return;
-	}
+
 	// (only a move from one thing to another needs a new picture)
 	const int tab = TabAt(gApp.pointerX, gApp.pointerY), row = RowAt(gApp.pointerX, gApp.pointerY);
-	if (CellAt(oldX, oldY) != CellAt(gApp.pointerX, gApp.pointerY) || tab != gApp.hoverTab || row != gApp.hoverRow) {
+	const bool volumeChanged = gLayout.volume.Contains(oldX, oldY) != gLayout.volume.Contains(gApp.pointerX, gApp.pointerY);
+	if (CellAt(oldX, oldY) != CellAt(gApp.pointerX, gApp.pointerY) || tab != gApp.hoverTab || row != gApp.hoverRow || volumeChanged) {
 		gApp.hoverTab = tab;
 		gApp.hoverRow = row;
 		Redraw();
@@ -883,28 +848,85 @@ void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 }
 
 // A click on a tray icon.
+bool BarIsAtBottom()
+{
+	return gSettings.placement == Placement::Bottom || gSettings.placement == Placement::BottomLeft
+		|| gSettings.placement == Placement::BottomRight;
+}
+
+// A menu hanging from a rectangle of the bar: below it, or above when the bar is at the bottom of the screen.
+void OpenMenuAt(std::vector<MenuItem> items, const Rect& r)
+{
+	MenuAnchor anchor;
+	anchor.x = static_cast<int>(r.x);
+	anchor.y = static_cast<int>(r.y);
+	anchor.w = static_cast<int>(r.w);
+	anchor.h = static_cast<int>(r.h);
+	anchor.above = BarIsAtBottom();
+	OpenMenu(std::move(items), anchor);
+}
+
+void RunCommand(const char* command)
+{
+	GError* error = nullptr;
+	if (!g_spawn_command_line_async(command, &error)) {
+		WarnLog("cannot run %s: %s\n", command, error != nullptr ? error->message : "?");
+		g_clear_error(&error);
+	}
+}
+
+// A click on a tray icon. The menu of a program that describes one (dbusmenu) is drawn here, in the look of the other menus; a
+// program that has none is asked for its own.
 void ClickCell(TrayCell* cell, uint32_t button)
 {
+	TrayItem* item = cell->item;
 	const int x = static_cast<int>(cell->cell.x), y = static_cast<int>(cell->cell.y);
-	if (button == BTN_LEFT)
-		gTray.Activate(cell->item, x, y);
-	else if (button == BTN_RIGHT)
-		gTray.ContextMenu(cell->item, x, y);
+	const bool hasMenu = gTray.HasMenu(item);
+	if (button == BTN_RIGHT || (button == BTN_LEFT && item->itemIsMenu)) {
+		if (hasMenu) {
+			const Rect r = cell->cell;
+			gTray.FetchMenu(item, [r](std::vector<MenuItem> items) {
+				if (!items.empty())
+					OpenMenuAt(std::move(items), r);
+			});
+		} else if (button == BTN_RIGHT)
+			gTray.ContextMenu(item, x, y);
+		else
+			gTray.Activate(item, x, y);
+	} else if (button == BTN_LEFT)
+		gTray.Activate(item, x, y);
 	else if (button == BTN_MIDDLE)
-		gTray.SecondaryActivate(cell->item, x, y);
+		gTray.SecondaryActivate(item, x, y);
+}
+
+// The speaker: a click mutes (or brings the sound back), a right click has the mute and the mixer.
+void ClickVolume(uint32_t button)
+{
+	if (button == BTN_LEFT || button == BTN_MIDDLE) {
+		gVolume.SetMuted(!gVolume.muted);
+	} else if (button == BTN_RIGHT) {
+		std::vector<MenuItem> items;
+		MenuItem mute;
+		mute.label = gVolume.muted ? "Unmute" : "Mute";
+		mute.action = []() { gVolume.SetMuted(!gVolume.muted); };
+		items.push_back(mute);
+		MenuItem mixer;
+		mixer.label = "Volume Mixer...";
+		mixer.action = []() {
+			if (g_find_program_in_path("pavucontrol") != nullptr)
+				RunCommand("pavucontrol");
+			else
+				RunCommand("systemsettings kcm_pulseaudio");
+		};
+		items.push_back(mixer);
+		OpenMenuAt(std::move(items), gLayout.volume);
+	}
 }
 
 // The menu that the header opens.
 void OpenLeafMenu()
 {
-	MenuAnchor anchor;
-	anchor.x = static_cast<int>(gLayout.header.x);
-	anchor.y = static_cast<int>(gLayout.header.y);
-	anchor.w = static_cast<int>(gLayout.header.w);
-	anchor.h = static_cast<int>(gLayout.header.h);
-	anchor.above = gSettings.placement == Placement::Bottom || gSettings.placement == Placement::BottomLeft
-		|| gSettings.placement == Placement::BottomRight;
-	OpenMenu(LeafMenuItems(), anchor);
+	OpenMenuAt(LeafMenuItems(), gLayout.header);
 }
 
 void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t button, uint32_t state)
@@ -918,30 +940,15 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 			MenuPointerButton(button, state);
 		return;
 	}
-	// the volume: a press on the slider sets the level and drags it; a click on the speaker mutes
-	if (gSettings.showVolume && button == BTN_LEFT) {
-		if (state == WL_POINTER_BUTTON_STATE_PRESSED && gLayout.volume.Contains(gApp.pointerX, gApp.pointerY)) {
-			if (gApp.pointerX < gLayout.volume.x + kSpeakerWidth) {
-				gApp.volumeMute = true;
-			} else {
-				gApp.volumeDrag = true;
-				gVolume.SetLevel(static_cast<float>(VolumeAt(gApp.pointerX)));
-			}
-			return;
-		}
-		if (state == WL_POINTER_BUTTON_STATE_RELEASED && (gApp.volumeDrag || gApp.volumeMute)) {
-			if (gApp.volumeMute && gApp.pointerX < gLayout.volume.x + kSpeakerWidth
-				&& gLayout.volume.Contains(gApp.pointerX, gApp.pointerY))
-				gVolume.SetMuted(!gVolume.muted);
-			gApp.volumeDrag = gApp.volumeMute = false;
-			return;
-		}
-	}
 	if (state != WL_POINTER_BUTTON_STATE_RELEASED)
 		return;
 	TrayCell* cell = CellAt(gApp.pointerX, gApp.pointerY);
 	if (cell != nullptr) {
 		ClickCell(cell, button);
+		return;
+	}
+	if (gSettings.showVolume && gLayout.volume.Contains(gApp.pointerX, gApp.pointerY)) {
+		ClickVolume(button);
 		return;
 	}
 	if (button != BTN_LEFT)
@@ -1252,6 +1259,13 @@ int main(int argc, char** argv)
 				r = gLayout.rows[n].row;
 			else if (what == "header")
 				r = gLayout.header;
+			else if (what == "cellR" && n < gLayout.cells.size()) {
+				ClickCell(&gLayout.cells[n], BTN_RIGHT);		// (a right click on a tray icon)
+				return;
+			} else if (what == "volumeR") {
+				ClickVolume(BTN_RIGHT);
+				return;
+			}
 			else {
 				DebugLog("debug click: nothing like %s\n", gApp.debugClick.c_str());
 				return;

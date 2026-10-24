@@ -19,6 +19,7 @@
 
 #include "icons.h"
 #include "loop.h"
+#include "menu.h"
 #include "util.h"
 
 struct TrayItem {
@@ -111,6 +112,47 @@ public:
     void Scroll(TrayItem* it, int delta) { CallItem(it, "Scroll", g_variant_new("(is)", delta, "vertical")); }
 
     bool HasMenu(const TrayItem* it) const { return !it->menuPath.empty() && it->menuPath != "/"; }
+
+    // Fetches the item's dbusmenu layout and hands it back as MenuItems.
+    void FetchMenu(TrayItem* it, std::function<void(std::vector<MenuItem>)> done) {
+        if (!HasMenu(it)) { done({}); return; }
+        struct Ctx {
+            SystemTray* tray;
+            std::string service, path;
+            std::function<void(std::vector<MenuItem>)> done;
+        };
+        auto* ctx = new Ctx{this, it->service, it->menuPath, std::move(done)};
+        // AboutToShow lets lazy menus (Electron, Qt) populate themselves first.
+        g_dbus_connection_call(fBus, ctx->service.c_str(), ctx->path.c_str(), "com.canonical.dbusmenu",
+            "AboutToShow", g_variant_new("(i)", 0), nullptr, G_DBUS_CALL_FLAGS_NONE, 500, nullptr,
+            [](GObject*, GAsyncResult* res, gpointer p) {
+                auto* ctx = static_cast<Ctx*>(p);
+                GVariant* r = g_dbus_connection_call_finish(ctx->tray->fBus, res, nullptr);
+                if (r) g_variant_unref(r);
+                const char* props[] = {nullptr};
+                g_dbus_connection_call(ctx->tray->fBus, ctx->service.c_str(), ctx->path.c_str(),
+                    "com.canonical.dbusmenu", "GetLayout",
+                    g_variant_new("(ii^as)", 0, -1, props), G_VARIANT_TYPE("(u(ia{sv}av))"),
+                    G_DBUS_CALL_FLAGS_NONE, 2000, nullptr,
+                    [](GObject*, GAsyncResult* res2, gpointer p2) {
+                        auto* ctx = static_cast<Ctx*>(p2);
+                        GError* err = nullptr;
+                        GVariant* reply = g_dbus_connection_call_finish(ctx->tray->fBus, res2, &err);
+                        std::vector<MenuItem> items;
+                        if (reply) {
+                            GVariant* layout = g_variant_get_child_value(reply, 1);
+                            items = ctx->tray->ParseMenuChildren(layout, ctx->service, ctx->path);
+                            g_variant_unref(layout);
+                            g_variant_unref(reply);
+                        } else {
+                            DebugLog("tray: GetLayout failed: %s\n", err ? err->message : "?");
+                            g_clear_error(&err);
+                        }
+                        ctx->done(std::move(items));
+                        delete ctx;
+                    }, ctx);
+            }, ctx);
+    }
 
 private:
     // ---- watcher role ----
@@ -388,6 +430,118 @@ private:
         }
         g_dbus_connection_call(fBus, it->service.c_str(), it->path.c_str(), "org.kde.StatusNotifierItem", method,
             params, nullptr, G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, nullptr, nullptr);
+    }
+
+    static std::string StripMnemonic(const std::string& s) {
+        std::string out;
+        for (size_t i = 0; i < s.size(); ++i) {
+            if (s[i] == '_') {
+                if (i + 1 < s.size() && s[i + 1] == '_') { out += '_'; ++i; }
+                continue;
+            }
+            out += s[i];
+        }
+        return out;
+    }
+
+    std::vector<MenuItem> ParseMenuChildren(GVariant* layout, const std::string& service, const std::string& path) {
+        std::vector<MenuItem> items;
+        GVariant* children = g_variant_get_child_value(layout, 2);
+        GVariantIter iter;
+        g_variant_iter_init(&iter, children);
+        GVariant* childBox;
+        while ((childBox = g_variant_iter_next_value(&iter))) {
+            GVariant* child = g_variant_get_variant(childBox);
+            g_variant_unref(childBox);
+            int id = 0;
+            GVariant* props = nullptr;
+            g_variant_get_child(child, 0, "i", &id);
+            props = g_variant_get_child_value(child, 1);
+
+            auto propStr = [&](const char* k) -> std::string {
+                GVariant* v = g_variant_lookup_value(props, k, G_VARIANT_TYPE_STRING);
+                std::string r = v ? g_variant_get_string(v, nullptr) : "";
+                if (v) g_variant_unref(v);
+                return r;
+            };
+            auto propBool = [&](const char* k, bool def) -> bool {
+                GVariant* v = g_variant_lookup_value(props, k, G_VARIANT_TYPE_BOOLEAN);
+                bool r = v ? g_variant_get_boolean(v) : def;
+                if (v) g_variant_unref(v);
+                return r;
+            };
+            auto propInt = [&](const char* k, int def) -> int {
+                GVariant* v = g_variant_lookup_value(props, k, G_VARIANT_TYPE_INT32);
+                int r = v ? g_variant_get_int32(v) : def;
+                if (v) g_variant_unref(v);
+                return r;
+            };
+
+            if (propBool("visible", true)) {
+                MenuItem m;
+                if (propStr("type") == "separator") {
+                    m.separator = true;
+                } else {
+                    m.label = StripMnemonic(propStr("label"));
+                    m.enabled = propBool("enabled", true);
+                    std::string toggle = propStr("toggle-type");
+                    int state = propInt("toggle-state", -1);
+                    if (toggle == "checkmark") m.check = (state == 1) ? kCheckOn : kCheckOff;
+                    else if (toggle == "radio") m.check = (state == 1) ? kRadioOn : kRadioOff;
+                    m.iconName = propStr("icon-name");
+                    GVariant* iconData = g_variant_lookup_value(props, "icon-data", G_VARIANT_TYPE("ay"));
+                    if (iconData) {
+                        m.icon = PngFromBytes(static_cast<const uint8_t*>(g_variant_get_data(iconData)),
+                            g_variant_get_size(iconData));
+                        g_variant_unref(iconData);
+                    }
+                    GVariant* grandChildren = g_variant_get_child_value(child, 2);
+                    bool hasChildren = g_variant_n_children(grandChildren) > 0
+                        || propStr("children-display") == "submenu";
+                    g_variant_unref(grandChildren);
+                    if (hasChildren) {
+                        GVariant* keep = g_variant_ref(child);
+                        auto sub = std::make_shared<std::vector<MenuItem>>(ParseMenuChildren(keep, service, path));
+                        g_variant_unref(keep);
+                        m.submenu = [sub]() { return *sub; };
+                    } else {
+                        GDBusConnection* bus = fBus;
+                        m.action = [bus, service, path, id]() {
+                            g_dbus_connection_call(bus, service.c_str(), path.c_str(), "com.canonical.dbusmenu", "Event",
+                                g_variant_new("(isvu)", id, "clicked", g_variant_new_int32(0),
+                                    static_cast<uint32_t>(time(nullptr))),
+                                nullptr, G_DBUS_CALL_FLAGS_NONE, 2000, nullptr, nullptr, nullptr);
+                        };
+                    }
+                }
+                // Drop leading / doubled separators, which some apps emit.
+                if (!(m.separator && (items.empty() || items.back().separator))) items.push_back(std::move(m));
+            }
+            g_variant_unref(props);
+            g_variant_unref(child);
+        }
+        g_variant_unref(children);
+        while (!items.empty() && items.back().separator) items.pop_back();
+        return items;
+    }
+
+    static IconRef PngFromBytes(const uint8_t* data, size_t size) {
+        struct Reader { const uint8_t* p; size_t left; };
+        Reader r{data, size};
+        cairo_surface_t* s = cairo_image_surface_create_from_png_stream(
+            [](void* closure, unsigned char* out, unsigned int len) -> cairo_status_t {
+                auto* rd = static_cast<Reader*>(closure);
+                if (len > rd->left) return CAIRO_STATUS_READ_ERROR;
+                memcpy(out, rd->p, len);
+                rd->p += len;
+                rd->left -= len;
+                return CAIRO_STATUS_SUCCESS;
+            }, &r);
+        if (cairo_surface_status(s) != CAIRO_STATUS_SUCCESS) {
+            cairo_surface_destroy(s);
+            return nullptr;
+        }
+        return MakeIconRef(s);
     }
 
     void Changed() {

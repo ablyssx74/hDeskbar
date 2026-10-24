@@ -11,14 +11,20 @@
 
 #include <wayland-client.h>
 
+#include "icons.h"
+
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
 
+enum MenuCheck { kCheckNone = 0, kCheckOff, kCheckOn, kRadioOff, kRadioOn };
+
 struct MenuItem {
 	std::string label;
 	std::string iconName;
+	IconRef icon;				// a picture of its own, when there is no name for it
+	MenuCheck check = kCheckNone;
 	bool separator = false;
 	bool enabled = true;
 	std::function<void()> action;

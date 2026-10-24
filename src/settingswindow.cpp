@@ -130,7 +130,7 @@ void Paint(Window* w)
 				case kCheckTray:
 				case kCheckCpu:
 				case kCheckVolume: {
-					static const char* const labels[] = { "Program tabs", "System tray", "CPU graph", "Volume slider" };
+					static const char* const labels[] = { "Program tabs", "System tray", "CPU graph", "Volume icon" };
 					const double bx = hit.x, by = hit.y + (hit.h - 14) / 2;
 					RoundedRectPath(cr, bx, by, 14, 14, 3, 3, 3, 3);
 					cairo_set_source_rgb(cr, 1, 1, 1);
