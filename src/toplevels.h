@@ -59,12 +59,14 @@ public:
     }
 
     // plasma: KWin's window management; wlr: the wlr-foreign-toplevel manager of the other compositors (either may be null).
+    // Called as each of the three is known: the compositor announces the windows that exist right when its protocol is bound, so
+    // the listener must be on by then (events for a proxy without one are dropped). Any of the three may be null.
     void Init(org_kde_plasma_window_management* plasma, zwlr_foreign_toplevel_manager_v1* wlr, wl_seat* seat) {
-        fSeat = seat;
-        if (plasma) {
+        if (seat) fSeat = seat;
+        if (plasma && fBackend == kNone) {
             fBackend = kPlasma;
             org_kde_plasma_window_management_add_listener(plasma, &kPlasmaMgmtListener, this);
-        } else if (wlr) {
+        } else if (wlr && fBackend == kNone) {
             fBackend = kWlr;
             zwlr_foreign_toplevel_manager_v1_add_listener(wlr, &kWlrMgrListener, this);
         }

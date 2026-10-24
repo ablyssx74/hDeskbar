@@ -334,6 +334,7 @@ void OpenSubmenu(Popup* parent, int row)
 void OpenMenu(std::vector<MenuItem> items, const MenuAnchor& anchor)
 {
 	CloseMenus();
+	DebugLog("open a menu of %d items\n", static_cast<int>(items.size()));
 	if (items.empty() || gWl.wmBase == nullptr || gWl.layerSurface == nullptr)
 		return;
 	auto root = std::make_unique<Popup>();

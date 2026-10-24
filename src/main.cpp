@@ -540,16 +540,17 @@ void DrawTab(cairo_t* cr, const TabRect& tr, const Team& team, bool vertical, bo
 
 	const double leftEdge = flush < 0 ? r.x + 8 : r.x + 10;
 	DrawIconAt(cr, team.iconName, leftEdge, r.y + (r.h - 16) / 2, 16);
-	const double labelRight = vertical ? tr.chevron.x : r.x + r.w - 12;
+	const bool chevron = vertical || team.windows.size() > 1;
+	const double labelRight = chevron ? tr.chevron.x : r.x + r.w - 12;
 	DrawLabel(cr, team.name, leftEdge + 22, r.y, labelRight - (leftEdge + 22), r.h, {1, 1, 1});
 
-	if (vertical) {
+	if (chevron) {
 		// the chevron, a darker shade of the tab's color there
 		const Color under = Mix(Mix(kAccent, kPanel, 0.6), {0, 0, 0}, 0.34);
 		const double cx = tr.chevron.x + tr.chevron.w / 2, cy = r.y + r.h / 2;
 		cairo_set_source_rgb(cr, under.r, under.g, under.b);
 		cairo_set_line_width(cr, 1.6);
-		if (team.collapsed) {
+		if (vertical && team.collapsed) {
 			cairo_move_to(cr, cx - 2, cy - 3.5);
 			cairo_line_to(cr, cx + 2, cy);
 			cairo_line_to(cr, cx - 2, cy + 3.5);
@@ -962,6 +963,71 @@ void UpdateTooltip()
 	}, nullptr);
 }
 
+void OpenMenuAt(std::vector<MenuItem> items, const Rect& r);
+
+Toplevel* FindWindow(uint64_t uid)
+{
+	for (Toplevel* window : gToplevels.Windows()) {
+		if (window->uid == uid)
+			return window;
+	}
+	return nullptr;
+}
+
+// The windows of a program, as a menu (the way the Deskbar's team menu lists them): the one in front marked, a hidden one in
+// parentheses; and Hide all, Show all and Close all under them. A window is found again by its number when it is chosen: it may
+// be gone by then.
+void OpenWindowList(size_t tabIndex)
+{
+	if (tabIndex >= gLayout.tabs.size())
+		return;
+	const TabRect& tab = gLayout.tabs[tabIndex];
+	const Team& team = gLayout.teams[tab.team];
+	std::vector<MenuItem> items;
+	std::vector<uint64_t> all;
+	bool anyHidden = false, anyShown = false;
+	for (Toplevel* window : team.windows) {
+		MenuItem item;
+		item.label = window->minimized ? "(" + window->title + ")" : window->title;
+		if (window->title.empty())
+			item.label = team.name;
+		item.iconName = team.iconName;
+		item.check = window->activated ? kRadioOn : kCheckNone;
+		const uint64_t uid = window->uid;
+		item.action = [uid]() {
+			if (Toplevel* w = FindWindow(uid))
+				gToplevels.Activate(w);
+		};
+		items.push_back(item);
+		all.push_back(uid);
+		(window->minimized ? anyHidden : anyShown) = true;
+	}
+	items.push_back(MenuItem::Separator());
+	auto each = [all](void (*act)(Toplevel*)) {
+		return [all, act]() {
+			for (uint64_t uid : all) {
+				if (Toplevel* w = FindWindow(uid))
+					act(w);
+			}
+		};
+	};
+	MenuItem hide;
+	hide.label = "Hide all";
+	hide.enabled = anyShown;
+	hide.action = each([](Toplevel* w) { gToplevels.Minimize(w); });
+	items.push_back(hide);
+	MenuItem show;
+	show.label = "Show all";
+	show.enabled = anyHidden;
+	show.action = each([](Toplevel* w) { gToplevels.Unminimize(w); });
+	items.push_back(show);
+	MenuItem close;
+	close.label = "Close all";
+	close.action = each([](Toplevel* w) { gToplevels.Close(w); });
+	items.push_back(close);
+	OpenMenuAt(std::move(items), tab.tab);
+}
+
 // A menu hanging from a rectangle of the bar: below it, or above when the bar is at the bottom of the screen.
 void OpenMenuAt(std::vector<MenuItem> items, const Rect& r)
 {
@@ -1061,6 +1127,12 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 		ClickVolume(button);
 		return;
 	}
+	if (button == BTN_RIGHT) {
+		const int tab = TabAt(gApp.pointerX, gApp.pointerY);
+		if (tab >= 0)
+			OpenWindowList(tab);
+		return;
+	}
 	if (button != BTN_LEFT)
 		return;
 	if (gLayout.header.Contains(gApp.pointerX, gApp.pointerY)) {
@@ -1080,6 +1152,9 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 		if (IsVertical(gSettings.placement) && hit.chevron.Contains(gApp.pointerX, gApp.pointerY)) {
 			gCollapsed[team.key] = !team.collapsed;
 			Redraw();
+		} else if (!IsVertical(gSettings.placement) && team.windows.size() > 1) {
+			// (in a vertical bar the windows are in the box under the tab)
+			OpenWindowList(tab);
 		} else if (team.latest != nullptr) {
 			// the program's tab: its last window comes to the front; a lone window that is in front goes away
 			if (team.windows.size() == 1 && team.latest->activated && !team.latest->minimized)
@@ -1183,9 +1258,11 @@ void RegistryGlobal(void*, wl_registry* registry, uint32_t name, const char* int
 		// (the protocol wants at least version 17)
 		gApp.plasmaWindows = static_cast<org_kde_plasma_window_management*>(
 			wl_registry_bind(registry, name, &org_kde_plasma_window_management_interface, 21));
+		gToplevels.Init(gApp.plasmaWindows, nullptr, nullptr);		// (now: the windows that exist are announced at once)
 	} else if (strcmp(interface, zwlr_foreign_toplevel_manager_v1_interface.name) == 0) {
 		gApp.wlrToplevels = static_cast<zwlr_foreign_toplevel_manager_v1*>(
 			wl_registry_bind(registry, name, &zwlr_foreign_toplevel_manager_v1_interface, 3));
+		gToplevels.Init(nullptr, gApp.wlrToplevels, nullptr);
 	} else if (strcmp(interface, wl_seat_interface.name) == 0) {
 		gApp.seat = static_cast<wl_seat*>(wl_registry_bind(registry, name, &wl_seat_interface, std::min(version, 5u)));
 		wl_seat_add_listener(gApp.seat, &kSeatListener, nullptr);
@@ -1310,8 +1387,11 @@ int main(int argc, char** argv)
 
 	wl_display_roundtrip(gApp.display);		// (the seat and the output tell what they have)
 	gApps = new AppDatabase();
-	gToplevels.onChanged = []() { Redraw(); };
-	gToplevels.Init(gApp.plasmaWindows, gApp.wlrToplevels, gApp.seat);
+	gToplevels.onChanged = []() {
+		DebugLog("the window list changed: %d windows\n", static_cast<int>(gToplevels.Windows().size()));
+		Redraw();
+	};
+	gToplevels.Init(nullptr, nullptr, gApp.seat);
 	if (!gToplevels.Available()) {
 		WarnLog("no window-management protocol: the program tabs are left out.\n");
 		if (DesktopIs("KDE"))
@@ -1371,7 +1451,10 @@ int main(int argc, char** argv)
 				r = gLayout.rows[n].row;
 			else if (what == "header")
 				r = gLayout.header;
-			else if (what == "cellR" && n < gLayout.cells.size()) {
+			else if (what == "tabR" && n < gLayout.tabs.size()) {
+				OpenWindowList(n);		// (a right click on a program's tab)
+				return;
+			} else if (what == "cellR" && n < gLayout.cells.size()) {
 				ClickCell(&gLayout.cells[n], BTN_RIGHT);		// (a right click on a tray icon)
 				return;
 			} else if (what == "volumeR") {
