@@ -45,13 +45,18 @@ $(GEN_DIR)/%-protocol.c: $(PROTO_DIR)/%.xml | $(GEN_DIR)
 $(GEN_DIR)/%-protocol.o: $(GEN_DIR)/%-protocol.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-# the icon is compiled in as a byte array (od + sed: no xxd needed)
+# the icons are compiled in as byte arrays (od + sed: no xxd needed)
 $(GEN_DIR)/icon-data.h: data/snaketracker.svg | $(GEN_DIR)
 	{ echo 'static const unsigned char kSnakeTrackerSvg[] = {'; \
 	  od -An -v -tx1 $< | sed 's/\([0-9a-f][0-9a-f]\)/0x\1,/g'; \
 	  echo '};'; } > $@
 
-$(GEN_DIR)/%.o: src/%.cpp $(PROTO_HEADERS) $(GEN_DIR)/icon-data.h | $(GEN_DIR)
+$(GEN_DIR)/about-icon-data.h: data/snaketracker-about.svg | $(GEN_DIR)
+	{ echo 'static const unsigned char kAboutSvg[] = {'; \
+	  od -An -v -tx1 $< | sed 's/\([0-9a-f][0-9a-f]\)/0x\1,/g'; \
+	  echo '};'; } > $@
+
+$(GEN_DIR)/%.o: src/%.cpp $(PROTO_HEADERS) $(GEN_DIR)/icon-data.h $(GEN_DIR)/about-icon-data.h | $(GEN_DIR)
 	$(CXX) $(CXXFLAGS) -MMD -c -o $@ $<
 
 $(TARGET): $(OBJECTS) $(PROTO_OBJECTS)
