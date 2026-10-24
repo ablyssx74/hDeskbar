@@ -63,34 +63,51 @@ struct Box {
 Box ButtonBox(const Alert* a, size_t i)
 {
 	if (a->about)
-		return { a->width - 23.0 - 80, a->height - 18.0 - 26, 80, 26 };
+		return { a->width - 23.0 * 1.1 - 80 * 1.1, a->height - 18.0 * 1.1 - 26 * 1.1, 80 * 1.1, 26 * 1.1 };
 	const double right = a->width - 24.0;
 	const size_t fromRight = a->buttons.size() - 1 - i;
 	return { right - (fromRight + 1) * kButtonWidth - fromRight * kGap, a->height - 20.0 - kButtonHeight, kButtonWidth, kButtonHeight };
 }
 
-// The About window: the name, the icon, what it is, and a little shell with the thanks.
+// The About window: the name, the icon, what it is, and a little shell with the thanks. Drawn on a 360 x 427 page, which is enlarged.
+constexpr double kAboutScale = 1.1;
+
 void PaintAbout(cairo_t* cr, const Alert* a)
 {
-	auto show = [&](const char* text, const char* font, double x, double y, const Color& color) {
-		PangoLayout* layout = TextLayout(cr, text, font, 0);
+	cairo_scale(cr, kAboutScale, kAboutScale);
+	auto show = [&](const std::string& text, const char* font, double x, double y, const Color& color, int width = 0) {
+		PangoLayout* layout = TextLayout(cr, text, font, width);
 		cairo_set_source_rgb(cr, color.r, color.g, color.b);
 		cairo_move_to(cr, x, y);
 		pango_cairo_show_layout(cr, layout);
+		int w = 0, h = 0;
+		pango_layout_get_pixel_size(layout, &w, &h);
 		g_object_unref(layout);
+		return h;
 	};
 	show("hDeskbar", "Monospace Bold 15", 18, 24, { 0.10, 0.10, 0.16 });
 	DrawSnakeTrackerIcon(cr, 22, 54, 112);
 	show("A Haiku Deskbar for Linux", "Monospace Bold Italic 10", 106, 160, { 0, 0, 0 });
-	RoundedRectPath(cr, 38, 198, a->width - 76, 172, 12, 12, 12, 12);
+	const double boxX = 38, boxY = 198, boxW = 360 - 76, boxH = 172;
+	RoundedRectPath(cr, boxX, boxY, boxW, boxH, 12, 12, 12, 12);
 	cairo_set_source_rgb(cr, 0, 0, 0);
 	cairo_fill(cr);
+	// the text wraps inside the box, leaving room for the scroll bar on the right
+	const int textWidth = static_cast<int>(boxW - 8 - 30);
 	const Color purple = { 0.55, 0.10, 0.60 }, green = { 0.10, 0.62, 0.10 };
-	show("Welcome to the hDeskbar Shell", "Monospace 7", 46, 220, purple);
-	show(">", "Monospace 7", 46, 240, green);
-	show("> Special thanks goes to Haiku and Linux for many", "Monospace 7", 46, 253, green);
-	show("> years computer fun!", "Monospace 7", 46, 266, green);
-	show("> exit", "Monospace 7", 46, 292, green);
+	double y = boxY + 18;
+	y += show("Welcome to the hDeskbar Shell", "Monospace 7", boxX + 8, y, purple, textWidth) + 8;
+	y += show(">", "Monospace 7", boxX + 8, y, green, textWidth) + 2;
+	y += show("> Special thanks goes to Haiku and Linux for many years computer fun!", "Monospace 7", boxX + 8, y, green, textWidth) + 14;
+	show("> exit", "Monospace 7", boxX + 8, y, green, textWidth);
+	// a scroll bar that does not scroll: its track, and the pill that slides in it
+	const double barX = boxX + boxW - 16, barW = 7;
+	RoundedRectPath(cr, barX, boxY + 12, barW, boxH - 24, 3.5, 3.5, 3.5, 3.5);
+	cairo_set_source_rgba(cr, 1, 1, 1, 0.12);
+	cairo_fill(cr);
+	RoundedRectPath(cr, barX, boxY + 12, barW, (boxH - 24) * 0.55, 3.5, 3.5, 3.5, 3.5);
+	cairo_set_source_rgba(cr, 1, 1, 1, 0.55);
+	cairo_fill(cr);
 }
 
 void Paint(Alert* a)
@@ -101,7 +118,9 @@ void Paint(Alert* a)
 		cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
 		cairo_paint(cr);
 		if (a->about) {
+			cairo_save(cr);
 			PaintAbout(cr, a);
+			cairo_restore(cr);
 		} else {
 			PangoLayout* title = TextLayout(cr, a->title, "Sans Bold 11", 0);
 			cairo_set_source_rgb(cr, 0.10, 0.10, 0.16);
@@ -304,8 +323,8 @@ void ShowAbout()
 	auto alert = std::make_unique<Alert>();
 	Alert* a = alert.get();
 	a->about = true;
-	a->width = 360;
-	a->height = 427;
+	a->width = static_cast<int>(360 * kAboutScale);
+	a->height = static_cast<int>(427 * kAboutScale);
 	a->title = "About hDeskbar";
 	a->buttons = { "Close" };
 	a->defaultButton = 0;
