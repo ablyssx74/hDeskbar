@@ -22,6 +22,7 @@ struct Settings {
 	bool showTray = true;
 	bool showCpu = true;
 	bool showVolume = true;
+	bool clockSeconds = false;	// 1:49:30 PM
 	bool clock24 = false;		// 13:49 instead of 1:49 PM
 	Color accent = { 70 / 255.0, 110 / 255.0, 200 / 255.0 };
 };

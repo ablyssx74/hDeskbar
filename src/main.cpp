@@ -369,7 +369,9 @@ void DrawClock(cairo_t* cr, double x, double y, double w, double h)
 	struct tm local;
 	localtime_r(&now, &local);
 	char text[32];
-	strftime(text, sizeof(text), gSettings.clock24 ? "%H:%M" : "%-I:%M %p", &local);
+	const char* format = gSettings.clock24 ? (gSettings.clockSeconds ? "%H:%M:%S" : "%H:%M")
+		: (gSettings.clockSeconds ? "%-I:%M:%S %p" : "%-I:%M %p");
+	strftime(text, sizeof(text), format, &local);
 
 	PangoLayout* layout = pango_cairo_create_layout(cr);
 	PangoFontDescription* font = pango_font_description_from_string("Sans 9");
@@ -1448,7 +1450,7 @@ int main(int argc, char** argv)
 
 	ApplyPlacement();
 
-	// the clock changes on the minute, and the CPU graph moves twice a second
+	// the clock changes on the minute (or the second), and the CPU graph moves twice a second
 	gApp.loop = g_main_loop_new(nullptr, FALSE);
 	AttachWaylandSource(gApp.display, []() { g_main_loop_quit(gApp.loop); });
 	gOnSettingsChanged = SettingsChanged;
@@ -1463,15 +1465,15 @@ int main(int argc, char** argv)
 		gVolume.Init();
 	}
 	gApp.cpu.Sample();
-	static int shownMinute = -1;
+	static long shownTime = -1;
 	g_timeout_add(kRefreshMs, [](gpointer) -> gboolean {
-		const int minute = static_cast<int>(time(nullptr) / 60);
+		const long stamp = static_cast<long>(time(nullptr)) / (gSettings.clockSeconds ? 1 : 60);
 		if (gSettings.showCpu) {
 			gApp.cpu.Sample();
 			Redraw();
-		} else if (minute != shownMinute)
+		} else if (stamp != shownTime)
 			Redraw();
-		shownMinute = minute;
+		shownTime = stamp;
 		return G_SOURCE_CONTINUE;
 	}, nullptr);
 	if (!gApp.debugClick.empty()) {

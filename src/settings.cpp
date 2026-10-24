@@ -68,6 +68,7 @@ void LoadSettings()
 		flag("show_cpu", &gSettings.showCpu);
 		flag("show_volume", &gSettings.showVolume);
 		flag("clock_24_hour", &gSettings.clock24);
+		flag("clock_seconds", &gSettings.clockSeconds);
 		char* place = g_key_file_get_string(file, "hdeskbar", "placement", nullptr);
 		if (place != nullptr) {
 			ParsePlacement(place, &gSettings.placement);
@@ -94,6 +95,7 @@ void SaveSettings()
 	g_key_file_set_boolean(file, "hdeskbar", "show_cpu", gSettings.showCpu);
 	g_key_file_set_boolean(file, "hdeskbar", "show_volume", gSettings.showVolume);
 	g_key_file_set_boolean(file, "hdeskbar", "clock_24_hour", gSettings.clock24);
+	g_key_file_set_boolean(file, "hdeskbar", "clock_seconds", gSettings.clockSeconds);
 	g_key_file_set_string(file, "hdeskbar", "placement", PlacementName(gSettings.placement));
 	char accent[16];
 	snprintf(accent, sizeof(accent), "#%02x%02x%02x", static_cast<int>(gSettings.accent.r * 255 + 0.5),
