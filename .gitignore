@@ -1,6 +1,7 @@
 build/
 *.o
 hdeskbar
-/src/
-/pkg/
 *.pkg.tar.zst
+/linux/src/
+/linux/pkg/
+/linux/hdeskbar/

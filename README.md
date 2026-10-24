@@ -115,7 +115,7 @@ Needs `wayland`, `cairo`, `pango`, `librsvg`, `gdk-pixbuf2` and `glib2` `libpuls
 
 ## Install (Arch / CachyOS)
     git clone https://github.com/ablyssx74/hDeskbar.git
-    cd hDeskbar
+    cd hDeskbar/linux
     makepkg -si
 
 This installs `hdeskbar` in `/usr/bin`, with its launcher and icon (on KDE Plasma the launcher is what lets KWin give it the window list).
