@@ -3,7 +3,7 @@
 #   make                build ./hdeskbar
 #   sudo make install   install into $(PREFIX) (default /usr)
 #
-# Requires (Arch / CachyOS package names): wayland cairo pango librsvg libpulse
+# Requires (Arch / CachyOS package names): wayland cairo pango librsvg libpulse curl
 
 CXX      ?= g++
 PREFIX   ?= /usr
@@ -15,7 +15,7 @@ GEN_DIR   = build
 
 PROTOCOLS = xdg-shell wlr-layer-shell-unstable-v1 plasma-window-management wlr-foreign-toplevel-management-unstable-v1 viewporter fractional-scale-v1
 
-PKGS = wayland-client cairo pangocairo librsvg-2.0 gdk-pixbuf-2.0 gio-unix-2.0 libpulse libpulse-mainloop-glib
+PKGS = wayland-client cairo pangocairo librsvg-2.0 gdk-pixbuf-2.0 gio-unix-2.0 libpulse libpulse-mainloop-glib libcurl
 
 PROTO_HEADERS = $(patsubst %,$(GEN_DIR)/%-client-protocol.h,$(PROTOCOLS))
 PROTO_SOURCES = $(patsubst %,$(GEN_DIR)/%-protocol.c,$(PROTOCOLS))
@@ -26,7 +26,7 @@ CXXFLAGS ?= -O2
 CXXFLAGS += -std=c++20 -Wall -Wextra -Wno-unused-parameter -I$(GEN_DIR) -DAPP_VERSION='"$(APP_VERSION)"' \
             $(shell pkg-config --cflags $(PKGS))
 CFLAGS   ?= -O2
-LIBS      = $(shell pkg-config --libs $(PKGS))
+LIBS      = $(shell pkg-config --libs $(PKGS)) -pthread
 
 SOURCES = $(wildcard src/*.cpp)
 OBJECTS = $(patsubst src/%.cpp,$(GEN_DIR)/%.o,$(SOURCES))

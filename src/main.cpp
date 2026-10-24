@@ -40,6 +40,7 @@
 #include "leaf.h"
 #include "loop.h"
 #include "scale.h"
+#include "update.h"
 #include "shm.h"
 #include "menu.h"
 #include "settings.h"
@@ -1585,6 +1586,7 @@ int main(int argc, char** argv)
 		gVolume.onChanged = []() { Redraw(); };
 		gVolume.Init();
 	}
+	StartUpdateChecker();
 	gApp.cpu.Sample();
 	static long shownTime = -1;
 	gApp.wantedAt = g_get_monotonic_time() / 1000;

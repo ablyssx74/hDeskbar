@@ -26,6 +26,7 @@ struct Settings {
 	bool alwaysOnTop = true;	// off: the bar is behind the windows
 	bool autoRaise = false;		// behind the windows, it comes over them when the pointer is at its edge
 	bool autoHide = false;		// it shrinks to a line at the edge of the screen, and comes back when the pointer is there
+	bool checkForUpdates = true;	// read the VERSION file of the repository a few seconds after the start
 	bool clock24 = false;		// 13:49 instead of 1:49 PM
 	Color accent = { 70 / 255.0, 110 / 255.0, 200 / 255.0 };
 };

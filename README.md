@@ -7,7 +7,7 @@ ProcessController, and a menu. It is drawn with cairo on a layer-shell surface, 
 It is a sibling of [hDesktop](https://github.com/ablyssx74/hDesktop) (the dock) and uses the same kind of backend: the
 compositor's window management protocols, StatusNotifierItem for the tray, PulseAudio for the volume.
 
-Status: **just started** (v0.20.2). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
+Status: **just started** (v0.21.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
 block) and its menu, the CPU graph, the clock, the volume icon, the system tray (with the programs' own menus), the program tabs and a settings window.
 
 ## Places
@@ -22,7 +22,7 @@ one pixel outline all round.
 The flags are for one run; the settings window keeps its choices in `~/.config/hdeskbar/hdeskbar.conf`.
 
 **Settings.** The menu of the header has Settings... : the program tabs, the system tray, the CPU graph and the volume icon can each
-be shown or left out ("Volume icon" among them), the clock can be 24-hour (13:49) and show seconds, the bar can be put in any of the six places, kept always on top or behind the windows (with auto-raise: it comes over them when the pointer is at its edge), or auto-hidden (an invisible strip at the edge of the screen, until the pointer is there), and the SnakeTracker color is chosen in a picker (a square, a hue strip, twenty presets; the panel
+be shown or left out ("Volume icon" among them), it checks GitHub for a newer version (a notification), the clock can be 24-hour (13:49) and show seconds, the bar can be put in any of the six places, kept always on top or behind the windows (with auto-raise: it comes over them when the pointer is at its edge), or auto-hidden (an invisible strip at the edge of the screen, until the pointer is there), and the SnakeTracker color is chosen in a picker (a square, a hue strip, twenty presets; the panel
 is a light tint of it). A choice takes effect at once, even the place: the bar moves.
 
 **The menu.** A click on the header opens the menu, laid out like the Haiku Deskbar's leaf menu, and beside a bar at the side of the
@@ -108,7 +108,7 @@ own (ContextMenu).
 The Haiku Deskbar's four small corner layouts are not planned.
 
 ## Build
-Needs `wayland`, `cairo`, `pango`, `librsvg`, `gdk-pixbuf2` and `glib2` and `libpulse` (Arch / CachyOS package names).
+Needs `wayland`, `cairo`, `pango`, `librsvg`, `gdk-pixbuf2` and `glib2` `libpulse` and `curl` (Arch / CachyOS package names).
 
     make
     ./hdeskbar --placement top-right
