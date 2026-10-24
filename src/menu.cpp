@@ -13,6 +13,7 @@
 
 #include "icons.h"
 #include "loop.h"
+#include "pill.h"
 #include "shm.h"
 #include "style.h"
 #include "util.h"
@@ -23,7 +24,8 @@ namespace {
 constexpr int kRow = 22;			// a row
 constexpr int kSeparator = 7;		// a separator's
 constexpr int kPad = 4;			// above the first row and under the last
-constexpr double kMenuRadius = 8;
+constexpr double kMenuRadius = 10;		// the pill's round ends, and the radius of the trail's bends
+constexpr int kOverlap = 20;			// a submenu opens this far over its parent, covering its arrows
 constexpr int kIconSize = 16;
 constexpr double kValueColumn = 54;		// the text of a bar row
 constexpr double kBarWidth = 80;			// and its bar
@@ -43,7 +45,7 @@ struct Popup {
 	int openRow = -1;			// the row whose submenu is open: it stays lit
 	int childSide = 0;			// where the open submenu is: 1 to the right of this menu, -1 to the left
 	int trailSide = 0;			// the edge of this menu that faces its parent: -1 the left one, 1 the right one
-	double trailRowY = 0;		// where the parent's row is, in this menu's pixels (the trail runs from the top to it)
+	double trailRowY = 0;		// where the parent's row is, in this menu's pixels (the trail's bar starts there)
 	int popupX = 0, popupY = 0;	// where the compositor put it, in its parent's pixels
 	wl_surface* surface = nullptr;
 	xdg_surface* xdgSurface = nullptr;
@@ -152,18 +154,223 @@ int ItemAt(const Popup* p, double y)
 	return -1;
 }
 
+struct TrailBar {
+	bool valid = false, onRight = false;
+	float top = 0, bottom = 0;
+};
+
+// The menu as one pill, with the lit row and the snake trail on it, as hDesktop's Tracker draws them: the pill is the panel color,
+// the lit row and the trail are the accent itself, shaded like a raised round bar. A submenu opens over its parent, and the trail
+// runs unbroken from the root along the open submenus: the row that opened a submenu runs flush to the shared edge, the submenu's
+// own row meets it flush, and the submenu adds a bar down that edge to wherever its own lit row sits. Worked out per pixel.
+void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
+{
+	using namespace PillGfx;
+	const int W = p->width, H = p->height;
+	const float w = static_cast<float>(W), h = static_cast<float>(H), kR = static_cast<float>(kMenuRadius), kBarW = kR;
+	std::vector<Piece> pieces;
+	std::vector<Fillet> fillets;
+	const Popup* parent = p->parent;
+	const bool parentLink = parent != nullptr && p->trailSide != 0 && parent->openRow == p->parentRow && parent->childSide != 0
+		&& (parent->hover < 0 || parent->hover == parent->openRow);
+	const bool parentOnLeft = p->trailSide < 0;
+	const bool opened = p->openRow >= 0 && p->childSide != 0;
+	const int own = opened ? p->openRow : p->hover;		// my row on the trail
+	float pTop = 0, pBottom = 0;
+	if (parentLink) {
+		pTop = static_cast<float>(p->trailRowY + 1);
+		pBottom = static_cast<float>(p->trailRowY + kRow - 1);
+	}
+	auto cornerR = [&](bool flush, bool exposed) { return (!flush || exposed) ? kR : 0.0f; };
+	auto addPiece = [&](float top, float bottom, bool childEdge, bool childOnRight, bool onTrail) {
+		const bool cutTop = top < 0, cutBottom = bottom > h;
+		const float t = std::max(top, 0.0f), b = std::min(bottom, h);
+		if (b <= t)
+			return;
+		const bool leftFlush = (childEdge && !childOnRight) || (onTrail && parentOnLeft);
+		const bool rightFlush = (childEdge && childOnRight) || (onTrail && !parentOnLeft);
+		const float x0 = leftFlush ? 0.0f : 3.0f, x1 = rightFlush ? w : w - 3.0f;
+		const bool expTop = onTrail && top < pTop - 0.5f, expBottom = onTrail && bottom > pBottom + 0.5f;
+		pieces.push_back({ x0, t, x1 - x0, b - t,
+			cutTop ? 0.0f : cornerR(leftFlush, onTrail && parentOnLeft && expTop),
+			cutTop ? 0.0f : cornerR(rightFlush, onTrail && !parentOnLeft && expTop),
+			cutBottom ? 0.0f : cornerR(rightFlush, onTrail && !parentOnLeft && expBottom),
+			cutBottom ? 0.0f : cornerR(leftFlush, onTrail && parentOnLeft && expBottom) });
+	};
+
+	litRow->assign(p->items.size(), 0);
+	float ownTop = 0, ownBottom = 0;
+	bool hasOwn = false;
+	for (size_t i = 0; i < p->items.size(); i++) {
+		const MenuItem& item = p->items[i];
+		if (item.separator)
+			continue;
+		const float y = static_cast<float>(kPad + p->tops[i] - p->scroll);
+		const bool hovered = static_cast<int>(i) == p->hover && item.enabled && !item.header;
+		const bool open = opened && static_cast<int>(i) == p->openRow && (p->hover < 0 || p->hover == p->openRow);
+		const bool parentRow = parentLink && static_cast<int>(i) == own;
+		if (parentRow) {
+			ownTop = y + 1;
+			ownBottom = y + kRow - 1;
+			hasOwn = true;
+		}
+		if ((hovered || open || parentRow) && y + kRow > 0 && y < h) {
+			(*litRow)[i] = 1;
+			addPiece(y + 1, y + kRow - 1, open, p->childSide > 0, parentRow);
+		}
+	}
+	*bar = TrailBar();
+	if (parentLink) {
+		// the bridge from my parent's row to mine
+		float top = pTop, bottom = pBottom;
+		if (hasOwn && ownBottom > ownTop) {
+			top = std::min(top, ownTop);
+			bottom = std::max(bottom, ownBottom);
+		}
+		top = std::max(top, 0.0f);
+		bottom = std::min(bottom, h);
+		if (bottom > top) {
+			const bool extTop = top < pTop - 0.5f, extBottom = bottom > pBottom + 0.5f;
+			const float outerT = extTop ? kR : 0.0f, innerT = extTop ? 0.0f : kR;
+			const float outerB = extBottom ? kR : 0.0f, innerB = extBottom ? 0.0f : kR;
+			if (parentOnLeft)
+				pieces.push_back({ 0, top, kBarW, bottom - top, outerT, innerT, innerB, outerB });
+			else
+				pieces.push_back({ w - kBarW, top, kBarW, bottom - top, innerT, outerT, outerB, innerB });
+			bar->valid = true;
+			bar->onRight = !parentOnLeft;
+			bar->top = top;
+			bar->bottom = bottom;
+			if (hasOwn && ownBottom > ownTop) {
+				const float ex = parentOnLeft ? kBarW : w - kBarW;
+				const int dx = parentOnLeft ? 1 : -1;
+				if (top < ownTop - 0.5f)
+					fillets.push_back({ ex, ownTop, dx, -1 });
+				if (bottom > ownBottom + 0.5f)
+					fillets.push_back({ ex, ownBottom, dx, 1 });
+			}
+		}
+	}
+
+	// the pill: the corner next to the parent is square, and so is the one at the bottom when this level ends within its parent's height
+	const bool overParent = parent != nullptr && p->trailSide != 0;
+	const bool squareBottom = overParent && p->popupY + p->height <= parent->height;
+	const double tlR = (overParent && parentOnLeft) ? 0.0 : kMenuRadius, trR = (overParent && !parentOnLeft) ? 0.0 : kMenuRadius;
+	const double blR = (squareBottom && parentOnLeft) ? 0.0 : kMenuRadius, brR = (squareBottom && !parentOnLeft) ? 0.0 : kMenuRadius;
+	RoundedRectPath(cr, 0, 0, w, h, tlR, trR, brR, blR);
+	cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
+	cairo_fill(cr);
+	if (pieces.empty() && fillets.empty())
+		return;
+
+	float fx0 = w, fy0 = h, fx1 = 0, fy1 = 0;
+	for (const Piece& q : pieces) {
+		fx0 = std::min(fx0, q.x);
+		fy0 = std::min(fy0, q.y);
+		fx1 = std::max(fx1, q.x + q.w);
+		fy1 = std::max(fy1, q.y + q.h);
+	}
+	for (const Fillet& f : fillets) {
+		fx0 = std::min(fx0, std::min(f.x, f.x + f.dx * kR));
+		fy0 = std::min(fy0, std::min(f.y, f.y + f.dy * kR));
+		fx1 = std::max(fx1, std::max(f.x, f.x + f.dx * kR));
+		fy1 = std::max(fy1, std::max(f.y, f.y + f.dy * kR));
+	}
+	const int margin = 10;		// what the shading reaches
+	const int bx0 = std::max(0, static_cast<int>(std::floor(fx0)) - margin), by0 = std::max(0, static_cast<int>(std::floor(fy0)) - margin);
+	const int bx1 = std::min(W - 1, static_cast<int>(std::ceil(fx1)) + margin), by1 = std::min(H - 1, static_cast<int>(std::ceil(fy1)) + margin);
+	if (bx1 < bx0 || by1 < by0)
+		return;
+	const int BW = bx1 - bx0 + 1, BH = by1 - by0 + 1;
+	std::vector<float> lit(static_cast<size_t>(BW) * BH, 0.0f), shade;
+	for (const Piece& q : pieces) {
+		const int x0 = std::max(bx0, static_cast<int>(std::floor(q.x)) - 1), x1 = std::min(bx1, static_cast<int>(std::ceil(q.x + q.w)) + 1);
+		const int y0 = std::max(by0, static_cast<int>(std::floor(q.y)) - 1), y1 = std::min(by1, static_cast<int>(std::ceil(q.y + q.h)) + 1);
+		for (int yy = y0; yy <= y1; yy++) {
+			for (int xx = x0; xx <= x1; xx++) {
+				float& dst = lit[static_cast<size_t>(yy - by0) * BW + (xx - bx0)];
+				dst = std::max(dst, RoundRectCoverage(xx + 0.5f, yy + 0.5f, q.x, q.y, q.w, q.h, q.tl, q.tr, q.br, q.bl));
+			}
+		}
+	}
+	for (const Fillet& f : fillets) {
+		const int x0 = std::max(bx0, static_cast<int>(std::floor(std::min(f.x, f.x + f.dx * kR))) - 1);
+		const int x1 = std::min(bx1, static_cast<int>(std::ceil(std::max(f.x, f.x + f.dx * kR))) + 1);
+		const int y0 = std::max(by0, static_cast<int>(std::floor(std::min(f.y, f.y + f.dy * kR))) - 1);
+		const int y1 = std::min(by1, static_cast<int>(std::ceil(std::max(f.y, f.y + f.dy * kR))) + 1);
+		for (int yy = y0; yy <= y1; yy++) {
+			for (int xx = x0; xx <= x1; xx++) {
+				float& dst = lit[static_cast<size_t>(yy - by0) * BW + (xx - bx0)];
+				dst = std::max(dst, FilletCoverage(xx + 0.5f, yy + 0.5f, f.x, f.y, f.dx, f.dy, kR));
+			}
+		}
+	}
+	// (the lit shapes stay inside the pill's corners)
+	const int cornerSize = static_cast<int>(std::ceil(kR)) + 1;
+	for (int y = 0; y < BH; y++) {
+		const int py = by0 + y;
+		if (py >= cornerSize && py < H - cornerSize)
+			continue;
+		for (int x = 0; x < BW; x++) {
+			const int px = bx0 + x;
+			if (px >= cornerSize && px < W - cornerSize)
+				continue;
+			lit[static_cast<size_t>(y) * BW + x] *= RoundRectCoverage(px + 0.5f, py + 0.5f, 0, 0, w, h, static_cast<float>(tlR),
+				static_cast<float>(trR), static_cast<float>(brR), static_cast<float>(blR));
+		}
+	}
+	RaisedShade(lit, BW, BH, 1.0f, shade);
+
+	cairo_surface_t* image = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, BW, BH);
+	if (cairo_surface_status(image) != CAIRO_STATUS_SUCCESS) {
+		cairo_surface_destroy(image);
+		return;
+	}
+	uint8_t* bits = cairo_image_surface_get_data(image);
+	const int stride = cairo_image_surface_get_stride(image);
+	for (int yy = 0; yy < BH; yy++) {
+		uint32_t* row = reinterpret_cast<uint32_t*>(bits + yy * stride);
+		for (int xx = 0; xx < BW; xx++) {
+			const size_t k = static_cast<size_t>(yy) * BW + xx;
+			const float a = lit[k];
+			if (a <= 0.0f) {
+				row[xx] = 0;
+				continue;
+			}
+			float r = static_cast<float>(kAccent.r * 255), g = static_cast<float>(kAccent.g * 255), b = static_cast<float>(kAccent.b * 255);
+			const float rs = shade[k];
+			if (rs > 0.0f) {
+				r += (255.0f - r) * rs;
+				g += (255.0f - g) * rs;
+				b += (255.0f - b) * rs;
+			} else if (rs < 0.0f) {
+				r *= 1.0f + rs;
+				g *= 1.0f + rs;
+				b *= 1.0f + rs;
+			}
+			auto channel = [&](float v) { return static_cast<uint32_t>(std::lround(std::clamp(v, 0.0f, 255.0f) * a)); };
+			row[xx] = (static_cast<uint32_t>(std::lround(a * 255.0f)) << 24) | (channel(r) << 16) | (channel(g) << 8) | channel(b);
+		}
+	}
+	cairo_surface_mark_dirty(image);
+	cairo_save(cr);
+	cairo_set_source_surface(cr, image, bx0, by0);
+	cairo_paint(cr);
+	cairo_restore(cr);
+	cairo_surface_destroy(image);
+}
+
 void Paint(Popup* p)
 {
 	if (!p->configured || p->surface == nullptr)
 		return;
 	wl_buffer* buffer = NewShmBuffer(p->width, p->height, [p](cairo_t* cr) {
 		const double w = p->width, h = p->height;
-		RoundedRectPath(cr, 0, 0, w, h, kMenuRadius, kMenuRadius, kMenuRadius, kMenuRadius);
-		cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
-		cairo_fill(cr);
-
+		std::vector<char> litRow;
+		TrailBar bar;
+		DrawPill(p, cr, &litRow, &bar);
 		cairo_save(cr);
-		RoundedRectPath(cr, 1, 1, w - 2, h - 2, kMenuRadius - 1, kMenuRadius - 1, kMenuRadius - 1, kMenuRadius - 1);
+		cairo_rectangle(cr, 0, 0, w, h);
 		cairo_clip(cr);
 		for (size_t i = 0; i < p->items.size(); i++) {
 			const MenuItem& item = p->items[i];
@@ -179,24 +386,7 @@ void Paint(Popup* p)
 				cairo_fill(cr);
 				continue;
 			}
-			const bool opened = static_cast<int>(i) == p->openRow && p->childSide != 0;
-			const bool lit = (static_cast<int>(i) == p->hover || opened) && item.enabled && !item.header;
-			if (lit) {
-				cairo_pattern_t* raised = cairo_pattern_create_linear(0, y, 0, y + kRow);
-				const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
-				cairo_pattern_add_color_stop_rgb(raised, 0, light.r, light.g, light.b);
-				cairo_pattern_add_color_stop_rgb(raised, 0.5, kAccent.r, kAccent.g, kAccent.b);
-				cairo_pattern_add_color_stop_rgb(raised, 1, dark.r, dark.g, dark.b);
-				if (opened) {
-					// the trail: the row runs on to the edge that the submenu is at, flat there
-					const double x0 = p->childSide > 0 ? 4 : -12, x1 = p->childSide > 0 ? w + 12 : w - 4;
-					RoundedRectPath(cr, x0, y + 1, x1 - x0, kRow - 2, 10, 10, 10, 10);
-				} else
-					RoundedRectPath(cr, 4, y + 1, w - 8, kRow - 2, 10, 10, 10, 10);
-				cairo_set_source(cr, raised);
-				cairo_fill(cr);
-				cairo_pattern_destroy(raised);
-			}
+			const bool lit = litRow[i] != 0;
 			const double alpha = item.enabled ? 1.0 : 0.45;
 			const double checkWidth = p->hasChecks ? 16 : 0;
 			if (item.check != kCheckNone) {
@@ -322,7 +512,8 @@ void Paint(Popup* p)
 				text(item.label, textX, w - textX - 20);
 			}
 
-			if (item.submenu && !item.noArrow) {
+			const bool underTrail = bar.valid && bar.onRight && y + kRow / 2.0 >= bar.top && y + kRow / 2.0 <= bar.bottom;
+			if (item.submenu && !item.noArrow && !underTrail) {
 				const double cx = w - 14, cy = y + kRow / 2.0;
 				cairo_set_line_width(cr, 1.6);
 				cairo_move_to(cr, cx - 2, cy - 3.5);
@@ -333,27 +524,6 @@ void Paint(Popup* p)
 				else
 					cairo_set_source_rgba(cr, 0.10, 0.10, 0.16, alpha);
 				cairo_stroke(cr);
-			}
-		}
-		// the trail of this menu's origin: a strip along the edge that faces its parent, from the top down to the parent's row
-		if (p->parent != nullptr && p->trailSide != 0) {
-			const double stripW = 12;
-			const double x0 = p->trailSide < 0 ? -4 : w - stripW + 4;
-			const double y0 = -4, y1 = std::min(h + 4, p->trailRowY + kRow - 1);
-			if (y1 > 0) {
-				cairo_pattern_t* raised = cairo_pattern_create_linear(x0, 0, x0 + stripW, 0);
-				const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
-				if (p->trailSide < 0) {
-					cairo_pattern_add_color_stop_rgb(raised, 0, kAccent.r, kAccent.g, kAccent.b);
-					cairo_pattern_add_color_stop_rgb(raised, 1, light.r, light.g, light.b);
-				} else {
-					cairo_pattern_add_color_stop_rgb(raised, 0, light.r, light.g, light.b);
-					cairo_pattern_add_color_stop_rgb(raised, 1, dark.r, dark.g, dark.b);
-				}
-				RoundedRectPath(cr, x0, y0, stripW, y1 - y0, 6, 6, 6, 6);
-				cairo_set_source(cr, raised);
-				cairo_fill(cr);
-				cairo_pattern_destroy(raised);
 			}
 		}
 		// the arrows of a long menu that scrolls
@@ -374,10 +544,6 @@ void Paint(Popup* p)
 		}
 		cairo_restore(cr);
 
-		RoundedRectPath(cr, 0.5, 0.5, w - 1, h - 1, kMenuRadius - 0.5, kMenuRadius - 0.5, kMenuRadius - 0.5, kMenuRadius - 0.5);
-		cairo_set_source_rgb(cr, kOutline.r, kOutline.g, kOutline.b);
-		cairo_set_line_width(cr, 1);
-		cairo_stroke(cr);
 	});
 	if (buffer == nullptr)
 		return;
@@ -532,7 +698,8 @@ void OpenSubmenu(Popup* parent, int row)
 	if (raw->liveMs > 0)
 		raw->liveTimer = g_timeout_add(raw->liveMs, LiveTick, raw);
 	const int y = kPad + parent->tops[row] - parent->scroll;
-	Create(raw, parent, 0, y, parent->width, kRow, XDG_POSITIONER_ANCHOR_TOP_RIGHT, XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, -3, -kPad,
+	Create(raw, parent, kOverlap, y, parent->width - 2 * kOverlap, kRow, XDG_POSITIONER_ANCHOR_TOP_RIGHT,
+		XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, 0, -kPad,
 		XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y
 			| XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y);
 }
