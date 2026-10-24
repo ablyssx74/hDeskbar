@@ -1,7 +1,7 @@
 # Maintainer: Kris Beazley <hDesktop@epluribusunix.net>
 # Build and install on Arch / CachyOS:  cd linux && makepkg -si
 pkgname=hdeskbar-git
-pkgver=0.21.4.r34.08b0e60
+pkgver=0.21.5.r35.128e575
 pkgrel=1
 pkgdesc="The SnakeTracker Deskbar for Wayland (KDE Plasma, Hyprland, Sway, niri, labwc...)"
 arch=('x86_64' 'aarch64')

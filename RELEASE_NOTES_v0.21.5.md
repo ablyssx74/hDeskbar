@@ -27,4 +27,6 @@ On KDE Plasma log out and in again after the first install: the launcher it inst
 
 ## Notes
 - A vertical bar does not yet keep windows clear of itself (a horizontal one does, when it is always on top and not auto-hidden).
-- The update check reads the `VERSION` file of this repository.
+- With Always on top off the bar is behind the windows, so a maximized window covers it (Auto-raise brings it over them when the
+  pointer is at the edge of the screen).
+- The update check reads the `VERSION` file of this repository, and can be turned off in the preferences.
