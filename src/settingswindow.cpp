@@ -17,28 +17,13 @@
 #include "settings.h"
 #include "shm.h"
 #include "style.h"
+#include "colorwindow.h"
 #include "util.h"
 #include "wl.h"
 
 namespace {
 
 constexpr int kWidth = 360, kHeight = 376;
-
-struct Swatch {
-	const char* name;
-	Color color;
-};
-
-const Swatch kSwatches[] = {
-	{"Blue", { 70 / 255.0, 110 / 255.0, 200 / 255.0 }},
-	{"Purple", { 125 / 255.0, 95 / 255.0, 205 / 255.0 }},
-	{"Teal", { 40 / 255.0, 150 / 255.0, 160 / 255.0 }},
-	{"Green", { 70 / 255.0, 160 / 255.0, 90 / 255.0 }},
-	{"Orange", { 225 / 255.0, 130 / 255.0, 45 / 255.0 }},
-	{"Red", { 205 / 255.0, 70 / 255.0, 70 / 255.0 }},
-	{"Pink", { 210 / 255.0, 95 / 255.0, 150 / 255.0 }},
-	{"Gray", { 110 / 255.0, 115 / 255.0, 130 / 255.0 }},
-};
 
 enum Kind { kCheckTabs, kCheckTray, kCheckCpu, kCheckVolume, kPlace, kColor, kClose };
 
@@ -78,8 +63,7 @@ void MakeHits(Window* w)
 	w->hits.push_back({ left, 116, 300, 22, kCheckVolume, 0 });
 	for (int i = 0; i < 6; i++)
 		w->hits.push_back({ left + (i % 2) * 160.0, 168 + (i / 2) * 24.0, 150, 22, kPlace, i });
-	for (int i = 0; i < 8; i++)
-		w->hits.push_back({ left + i * 38.0, 286, 30, 30, kColor, i });
+	w->hits.push_back({ left, 286, 150, 30, kColor, 0 });
 	w->hits.push_back({ kWidth - 24 - 80.0, kHeight - 24 - 26.0, 80, 26, kClose, 0 });
 }
 
@@ -168,18 +152,13 @@ void Paint(Window* w)
 					break;
 				}
 				case kColor: {
-					const Color& color = kSwatches[hit.index].color;
-					RoundedRectPath(cr, hit.x + 2, hit.y + 2, hit.w - 4, hit.h - 4, 7, 7, 7, 7);
-					cairo_set_source_rgb(cr, color.r, color.g, color.b);
-					cairo_fill(cr);
-					const bool chosen = std::abs(color.r - gSettings.accent.r) < 0.01 && std::abs(color.g - gSettings.accent.g) < 0.01
-						&& std::abs(color.b - gSettings.accent.b) < 0.01;
-					if (chosen || hover) {
-						RoundedRectPath(cr, hit.x + 0.5, hit.y + 0.5, hit.w - 1, hit.h - 1, 9, 9, 9, 9);
-						cairo_set_source_rgba(cr, kOutline.r, kOutline.g, kOutline.b, chosen ? 0.9 : 0.4);
-						cairo_set_line_width(cr, chosen ? 2 : 1);
-						cairo_stroke(cr);
-					}
+					// one half-pill showing the chosen color, which opens the picker
+					RoundedRectPath(cr, hit.x + 0.5, hit.y + 0.5, hit.w - 1, hit.h - 1, 15, 15, 15, 15);
+					cairo_set_source_rgb(cr, kAccent.r, kAccent.g, kAccent.b);
+					cairo_fill_preserve(cr);
+					cairo_set_source_rgba(cr, kOutline.r, kOutline.g, kOutline.b, hover ? 0.9 : 0.6);
+					cairo_set_line_width(cr, hover ? 2 : 1);
+					cairo_stroke(cr);
 					break;
 				}
 				case kClose: {
@@ -314,9 +293,18 @@ void SettingsPointerButton(uint32_t button, uint32_t state)
 		case kCheckVolume: gSettings.showVolume = !gSettings.showVolume; break;
 		case kPlace: gSettings.placement = kPlaces[hit.index].placement; break;
 		case kColor:
-			gSettings.accent = kSwatches[hit.index].color;
-			SetAccent(gSettings.accent);
-			break;
+			OpenColorWindow("Accent color", gSettings.accent, Color{ 70 / 255.0, 110 / 255.0, 200 / 255.0 },
+				[](const Color& c) {
+					gSettings.accent = c;
+					SetAccent(c);
+					SaveSettings();
+					if (gOnSettingsChanged)
+						gOnSettingsChanged();
+					if (gWindow)
+						Paint(gWindow.get());
+				},
+				[](bool) {});
+			return;
 		case kClose:
 			RunLater([]() { CloseWindow(); });
 			return;

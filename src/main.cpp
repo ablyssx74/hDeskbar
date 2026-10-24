@@ -31,6 +31,7 @@
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 #undef namespace
 #include "alert.h"
+#include "colorwindow.h"
 #include "apps.h"
 #include "cpumenu.h"
 #include "cpu.h"
@@ -813,6 +814,8 @@ void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface* surface, wl_fixed_t 
 			SettingsPointerEnter(wl_fixed_to_double(x), wl_fixed_to_double(y));
 		else if (AlertOwnsSurface(surface))
 			AlertPointerEnter(surface, wl_fixed_to_double(x), wl_fixed_to_double(y));
+		else if (ColorWindowOwnsSurface(surface))
+			ColorWindowPointerEnter(wl_fixed_to_double(x), wl_fixed_to_double(y));
 		return;
 	}
 	gApp.pointerX = wl_fixed_to_double(x);
@@ -828,6 +831,8 @@ void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface* surface)
 			SettingsPointerLeave();
 		else if (AlertOwnsSurface(surface))
 			AlertPointerLeave();
+		else if (ColorWindowOwnsSurface(surface))
+			ColorWindowPointerLeave();
 		else
 			MenuPointerLeave();
 		if (gWl.pointerSurface == surface)
@@ -847,6 +852,8 @@ void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 			SettingsPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
 		else if (AlertOwnsSurface(gWl.pointerSurface))
 			AlertPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
+		else if (ColorWindowOwnsSurface(gWl.pointerSurface))
+			ColorWindowPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
 		else
 			MenuPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
 		return;
@@ -1133,6 +1140,8 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 			SettingsPointerButton(button, state);
 		else if (AlertOwnsSurface(gWl.pointerSurface))
 			AlertPointerButton(button, state);
+		else if (ColorWindowOwnsSurface(gWl.pointerSurface))
+			ColorWindowPointerButton(button, state);
 		else
 			MenuPointerButton(button, state);
 		return;

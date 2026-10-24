@@ -7,7 +7,7 @@ ProcessController, and a menu. It is drawn with cairo on a layer-shell surface, 
 It is a sibling of [hDesktop](https://github.com/ablyssx74/hDesktop) (the dock) and uses the same kind of backend: the
 compositor's window management protocols, StatusNotifierItem for the tray, PulseAudio for the volume.
 
-Status: **just started** (v0.13.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
+Status: **just started** (v0.14.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
 block) and its menu, the CPU graph, the clock, the volume icon, the system tray (with the programs' own menus), the program tabs and a settings window.
 
 ## Places
@@ -22,7 +22,7 @@ one pixel outline all round.
 The flags are for one run; the settings window keeps its choices in `~/.config/hdeskbar/hdeskbar.conf`.
 
 **Settings.** The menu of the header has Settings... : the program tabs, the system tray, the CPU graph and the volume icon can each
-be shown or left out ("Volume icon" among them), the bar can be put in any of the six places, and the SnakeTracker color can be chosen from eight (the panel
+be shown or left out ("Volume icon" among them), the bar can be put in any of the six places, and the SnakeTracker color is chosen in a picker (a square, a hue strip, twenty presets; the panel
 is a light tint of it). A choice takes effect at once, even the place: the bar moves.
 
 **The menu.** A click on the header opens the menu, laid out like the Haiku Deskbar's leaf menu, and beside a bar at the side of the
