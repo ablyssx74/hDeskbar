@@ -23,6 +23,9 @@ struct Settings {
 	bool showCpu = true;
 	bool showVolume = true;
 	bool clockSeconds = false;	// 1:49:30 PM
+	bool alwaysOnTop = true;	// off: the bar is behind the windows
+	bool autoRaise = false;		// behind the windows, it comes over them when the pointer is at its edge
+	bool autoHide = false;		// it shrinks to a line at the edge of the screen, and comes back when the pointer is there
 	bool clock24 = false;		// 13:49 instead of 1:49 PM
 	Color accent = { 70 / 255.0, 110 / 255.0, 200 / 255.0 };
 };

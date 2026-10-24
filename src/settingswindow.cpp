@@ -26,7 +26,7 @@ namespace {
 
 constexpr int kWidth = 360, kHeight = 430;
 
-enum Kind { kCheckTabs, kCheckTray, kCheckCpu, kCheckVolume, kCheck24, kCheckSeconds, kPlace, kColor, kClose };
+enum Kind { kCheckTabs, kCheckTray, kCheckCpu, kCheckVolume, kCheck24, kCheckSeconds, kCheckTop, kCheckRaise, kCheckHide, kPlace, kColor, kClose };
 
 struct Hit {
 	double x, y, w, h;
@@ -58,12 +58,16 @@ void MakeHits(Window* w)
 {
 	w->hits.clear();
 	const double left = 24;
-	w->hits.push_back({ left, 44, 300, 22, kCheckTabs, 0 });
-	w->hits.push_back({ left, 68, 300, 22, kCheckTray, 0 });
-	w->hits.push_back({ left, 92, 300, 22, kCheckCpu, 0 });
-	w->hits.push_back({ left, 116, 300, 22, kCheckVolume, 0 });
-	w->hits.push_back({ left, 140, 300, 22, kCheck24, 0 });
-	w->hits.push_back({ left, 164, 300, 22, kCheckSeconds, 0 });
+	w->hits.push_back({ left, 44, 150, 22, kCheckTabs, 0 });
+	w->hits.push_back({ left, 68, 150, 22, kCheckTray, 0 });
+	w->hits.push_back({ left, 92, 150, 22, kCheckCpu, 0 });
+	w->hits.push_back({ left, 116, 150, 22, kCheckVolume, 0 });
+	w->hits.push_back({ left, 140, 150, 22, kCheck24, 0 });
+	w->hits.push_back({ left, 164, 150, 22, kCheckSeconds, 0 });
+	const double right = 196;
+	w->hits.push_back({ right, 44, 140, 22, kCheckTop, 0 });
+	w->hits.push_back({ right, 68, 140, 22, kCheckRaise, 0 });
+	w->hits.push_back({ right, 92, 140, 22, kCheckHide, 0 });
 	for (int i = 0; i < 6; i++)
 		w->hits.push_back({ left + (i % 2) * 160.0, 222 + (i / 2) * 24.0, 150, 22, kPlace, i });
 	w->hits.push_back({ left, 340, 150, 30, kColor, 0 });
@@ -94,6 +98,9 @@ bool Checked(Kind kind)
 		case kCheckVolume: return gSettings.showVolume;
 		case kCheck24: return gSettings.clock24;
 		case kCheckSeconds: return gSettings.clockSeconds;
+		case kCheckTop: return gSettings.alwaysOnTop;
+		case kCheckRaise: return gSettings.autoRaise;
+		case kCheckHide: return gSettings.autoHide;
 		default: return false;
 	}
 }
@@ -108,6 +115,7 @@ void Paint(Window* w)
 		cairo_paint(cr);
 
 		Text(cr, "Show", 16, 26, true, ink);
+		Text(cr, "Deskbar", 188, 26, true, ink);
 		Text(cr, "Place", 16, 204, true, ink);
 		Text(cr, "SnakeTracker color", 16, 322, true, ink);
 
@@ -120,8 +128,11 @@ void Paint(Window* w)
 				case kCheckCpu:
 				case kCheckVolume:
 				case kCheck24:
-				case kCheckSeconds: {
-					static const char* const labels[] = { "Program tabs", "System tray", "CPU graph", "Volume icon", "24-hour clock", "Seconds in the clock" };
+				case kCheckSeconds:
+				case kCheckTop:
+				case kCheckRaise:
+				case kCheckHide: {
+					static const char* const labels[] = { "Program tabs", "System tray", "CPU graph", "Volume icon", "24-hour clock", "Seconds in the clock", "Always on top", "Auto-raise", "Auto-hide" };
 					const double bx = hit.x, by = hit.y + (hit.h - 14) / 2;
 					RoundedRectPath(cr, bx, by, 14, 14, 3, 3, 3, 3);
 					cairo_set_source_rgb(cr, 1, 1, 1);
@@ -302,6 +313,9 @@ void SettingsPointerButton(uint32_t button, uint32_t state)
 		case kCheckVolume: gSettings.showVolume = !gSettings.showVolume; break;
 		case kCheck24: gSettings.clock24 = !gSettings.clock24; break;
 		case kCheckSeconds: gSettings.clockSeconds = !gSettings.clockSeconds; break;
+		case kCheckTop: gSettings.alwaysOnTop = !gSettings.alwaysOnTop; break;
+		case kCheckRaise: gSettings.autoRaise = !gSettings.autoRaise; break;
+		case kCheckHide: gSettings.autoHide = !gSettings.autoHide; break;
 		case kPlace: gSettings.placement = kPlaces[hit.index].placement; break;
 		case kColor:
 			OpenColorWindow("Accent color", gSettings.accent, Color{ 70 / 255.0, 110 / 255.0, 200 / 255.0 },

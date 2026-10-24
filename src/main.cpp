@@ -96,6 +96,12 @@ struct App {
 
 	int width = 150, height = 2 + kHeaderHeight + kRowHeight;		// what the bar asks for (a horizontal bar's width is the screen's)
 	bool configured = false;
+	// where the bar is out of the way: behind the windows, or shrunk to a line at the edge of the screen
+	bool revealed = true, hidden = false, onBar = false, onTrigger = false;
+	gint64 wantedAt = 0;
+	uint32_t anchor = 0;
+	wl_surface* triggerSurface = nullptr;			// a line at the screen's edge that brings a bar back from behind the windows
+	zwlr_layer_surface_v1* triggerLayer = nullptr;
 	CpuSampler cpu;
 	std::vector<float> cpuShown;	// the bars as drawn: the loads, smoothed
 };
@@ -720,13 +726,28 @@ Layout gLayout;
 
 // Draws the bar. A vertical bar whose content has grown asks for another height first (and is drawn when the compositor has
 // answered); a horizontal one has the width of the screen.
+void SyncTrigger();
+
 void Present()
 {
+	if (gApp.hidden) {
+		// shrunk to a line along the edge
+		wl_buffer* line = NewShmBuffer(gApp.width, gApp.height, [](cairo_t* cr) {
+			cairo_set_source_rgb(cr, kAccent.r, kAccent.g, kAccent.b);
+			cairo_paint(cr);
+		});
+		if (line != nullptr) {
+			AttachBuffer(gApp.surface, line, gApp.width, gApp.height);
+			wl_surface_commit(gApp.surface);
+		}
+		return;
+	}
 	Layout layout = MakeLayout(gApp.width, gApp.height);
 	if (IsVertical(gSettings.placement) && layout.height != gApp.height) {
 		gApp.height = layout.height;
 		zwlr_layer_surface_v1_set_size(gApp.layerSurface, gApp.width, gApp.height);
 		wl_surface_commit(gApp.surface);
+		SyncTrigger();
 		return;
 	}
 	layout.width = gApp.width;
@@ -782,9 +803,20 @@ int RowAt(double x, double y)
 	return -1;
 }
 
+void UpdateReveal();
+
 void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface* surface, wl_fixed_t x, wl_fixed_t y)
 {
 	gWl.pointerSurface = surface;
+	if (surface == gApp.triggerSurface && surface != nullptr) {
+		gApp.onTrigger = true;
+		UpdateReveal();
+		return;
+	}
+	if (surface == gApp.surface) {
+		gApp.onBar = true;
+		UpdateReveal();
+	}
 	if (surface != gApp.surface) {
 		if (MenuOwnsSurface(surface))
 			MenuPointerEnter(surface, wl_fixed_to_double(x), wl_fixed_to_double(y));
@@ -804,6 +836,17 @@ void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface* surface, wl_fixed_t 
 
 void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface* surface)
 {
+	if (surface == gApp.triggerSurface && surface != nullptr) {
+		gApp.onTrigger = false;
+		if (gWl.pointerSurface == surface)
+			gWl.pointerSurface = nullptr;
+		UpdateReveal();
+		return;
+	}
+	if (surface == gApp.surface) {
+		gApp.onBar = false;
+		UpdateReveal();
+	}
 	if (surface != gApp.surface) {
 		if (SettingsOwnsSurface(surface))
 			SettingsPointerLeave();
@@ -825,6 +868,8 @@ void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface* surface)
 
 void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 {
+	if (gWl.pointerSurface != nullptr && gWl.pointerSurface == gApp.triggerSurface)
+		return;
 	if (gWl.pointerSurface != gApp.surface) {
 		if (SettingsOwnsSurface(gWl.pointerSurface))
 			SettingsPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
@@ -1114,6 +1159,8 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 	if (serial != 0)
 		gWl.serial = serial;
 	CancelTooltip();
+	if (gWl.pointerSurface != nullptr && gWl.pointerSurface == gApp.triggerSurface)
+		return;
 	if (gWl.pointerSurface != gApp.surface && gWl.pointerSurface != nullptr) {
 		if (SettingsOwnsSurface(gWl.pointerSurface))
 			SettingsPointerButton(button, state);
@@ -1295,6 +1342,93 @@ void Usage(const char* program)
 	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu] [--no-tray] [--no-volume] [--no-tabs]\n", program);
 }
 
+constexpr int kStrip = 3;		// a hidden bar: this many pixels at the edge of the screen
+
+// Where the bar is: its layer (above the windows, or behind them unless it has been brought over them), its size (a line when it
+// is hidden), and the room it keeps clear.
+void ApplyVisibility()
+{
+	const bool vertical = IsVertical(gSettings.placement);
+	const bool hidden = gSettings.autoHide && !gApp.revealed;
+	const bool raised = gSettings.alwaysOnTop || (gSettings.autoRaise && gApp.revealed);
+	if (zwlr_layer_surface_v1_get_version(gApp.layerSurface) >= 2)
+		zwlr_layer_surface_v1_set_layer(gApp.layerSurface, raised ? ZWLR_LAYER_SHELL_V1_LAYER_TOP : ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM);
+	gApp.hidden = hidden;
+	if (vertical) {
+		gApp.width = hidden ? kStrip : kVerticalWidth;
+		zwlr_layer_surface_v1_set_size(gApp.layerSurface, gApp.width, gApp.height);
+	} else {
+		gApp.height = hidden ? kStrip : kHorizontalHeight;
+		zwlr_layer_surface_v1_set_size(gApp.layerSurface, 0, gApp.height);
+	}
+	// (a horizontal bar keeps windows clear of itself, if it stays where it is; a vertical one is not a full edge, so it reserves nothing yet)
+	const bool keepsClear = !vertical && gSettings.alwaysOnTop && !gSettings.autoHide;
+	zwlr_layer_surface_v1_set_exclusive_zone(gApp.layerSurface, keepsClear ? kHorizontalHeight : 0);
+	wl_surface_commit(gApp.surface);
+}
+
+// The line at the screen's edge that the pointer can find when windows cover the bar: it brings the bar over them.
+void TriggerConfigure(void*, zwlr_layer_surface_v1* layerSurface, uint32_t serial, uint32_t width, uint32_t height)
+{
+	zwlr_layer_surface_v1_ack_configure(layerSurface, serial);
+	if (gApp.triggerSurface == nullptr || width == 0 || height == 0)
+		return;
+	wl_buffer* buffer = NewShmBuffer(width, height, [](cairo_t* cr) {
+		cairo_set_source_rgba(cr, 0, 0, 0, 0.004);		// (nothing to see, but there to touch)
+		cairo_paint(cr);
+	});
+	if (buffer == nullptr)
+		return;
+	AttachBuffer(gApp.triggerSurface, buffer, width, height);
+	wl_surface_commit(gApp.triggerSurface);
+}
+
+const zwlr_layer_surface_v1_listener kTriggerListener = { TriggerConfigure, [](void*, zwlr_layer_surface_v1*) {} };
+
+void SyncTrigger()
+{
+	const bool wanted = gSettings.autoRaise && !gSettings.alwaysOnTop && gApp.layerShell != nullptr;
+	if (!wanted) {
+		if (gApp.triggerSurface != nullptr) {
+			zwlr_layer_surface_v1_destroy(gApp.triggerLayer);
+			ScaleForgetSurface(gApp.triggerSurface);
+			wl_surface_destroy(gApp.triggerSurface);
+			gApp.triggerLayer = nullptr;
+			gApp.triggerSurface = nullptr;
+			gApp.onTrigger = false;
+		}
+		return;
+	}
+	const bool vertical = IsVertical(gSettings.placement);
+	if (gApp.triggerSurface == nullptr) {
+		gApp.triggerSurface = wl_compositor_create_surface(gApp.compositor);
+		ScaleTrackSurface(gApp.triggerSurface);
+		gApp.triggerLayer = zwlr_layer_shell_v1_get_layer_surface(gApp.layerShell, gApp.triggerSurface, nullptr,
+			ZWLR_LAYER_SHELL_V1_LAYER_TOP, "hdeskbar-edge");
+		zwlr_layer_surface_v1_add_listener(gApp.triggerLayer, &kTriggerListener, nullptr);
+		zwlr_layer_surface_v1_set_exclusive_zone(gApp.triggerLayer, 0);
+		zwlr_layer_surface_v1_set_keyboard_interactivity(gApp.triggerLayer, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+	}
+	zwlr_layer_surface_v1_set_anchor(gApp.triggerLayer, gApp.anchor);
+	zwlr_layer_surface_v1_set_size(gApp.triggerLayer, vertical ? 1 : 0, vertical ? gApp.height : 1);
+	wl_surface_commit(gApp.triggerSurface);
+}
+
+// The bar comes out when the pointer is at it (or a menu of it is open), and goes away again a little after the pointer has left.
+void UpdateReveal()
+{
+	const bool automatic = gSettings.autoHide || (gSettings.autoRaise && !gSettings.alwaysOnTop);
+	const gint64 now = g_get_monotonic_time() / 1000;
+	const bool wanted = !automatic || gApp.onBar || gApp.onTrigger || MenusOpen();
+	if (wanted)
+		gApp.wantedAt = now;
+	const bool revealed = wanted || (gApp.revealed && now - gApp.wantedAt < 600);
+	if (revealed != gApp.revealed) {
+		gApp.revealed = revealed;
+		ApplyVisibility();
+	}
+}
+
 // The bar's place on the screen: which edges it hangs on, its size, and the room it keeps clear. It is told to the compositor,
 // and the bar is drawn again when the compositor has answered.
 void ApplyPlacement()
@@ -1319,12 +1453,11 @@ void ApplyPlacement()
 	} else
 		gApp.height = kHorizontalHeight;
 	gApp.shownPlacement = gSettings.placement;
+	gApp.anchor = anchor;
 	zwlr_layer_surface_v1_set_anchor(gApp.layerSurface, anchor);
-	zwlr_layer_surface_v1_set_size(gApp.layerSurface, vertical ? gApp.width : 0, gApp.height);
-	// (a horizontal bar keeps windows clear of itself; a vertical one is not a full edge, so it reserves nothing yet)
-	zwlr_layer_surface_v1_set_exclusive_zone(gApp.layerSurface, vertical ? 0 : gApp.height);
 	zwlr_layer_surface_v1_set_keyboard_interactivity(gApp.layerSurface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
-	wl_surface_commit(gApp.surface);
+	ApplyVisibility();
+	SyncTrigger();
 }
 
 bool gTrayStarted = false, gVolumeStarted = false;
@@ -1334,6 +1467,12 @@ void SettingsChanged()
 {
 	if (gSettings.placement != gApp.shownPlacement)
 		ApplyPlacement();
+	else {
+		gApp.revealed = true;
+		gApp.wantedAt = g_get_monotonic_time() / 1000;
+		ApplyVisibility();
+		SyncTrigger();
+	}
 	if (gSettings.showTray && !gTrayStarted) {
 		gTrayStarted = true;
 		gTray.onChanged = []() { Redraw(); };
@@ -1446,7 +1585,9 @@ int main(int argc, char** argv)
 	}
 	gApp.cpu.Sample();
 	static long shownTime = -1;
+	gApp.wantedAt = g_get_monotonic_time() / 1000;
 	g_timeout_add(kRefreshMs, [](gpointer) -> gboolean {
+		UpdateReveal();
 		const long stamp = static_cast<long>(time(nullptr)) / (gSettings.clockSeconds ? 1 : 60);
 		if (gSettings.showCpu) {
 			gApp.cpu.Sample();
