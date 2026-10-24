@@ -204,8 +204,6 @@ std::vector<RecentFile> ReadRecentFiles()
 				modified != nullptr ? g_date_time_to_unix(modified) : 0);
 			g_free(title);
 			g_free(mime);
-			if (modified != nullptr)
-				g_date_time_unref(modified);
 		}
 		g_strfreev(uris);
 	}
