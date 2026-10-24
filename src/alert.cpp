@@ -100,7 +100,7 @@ void PaintAbout(cairo_t* cr, const Alert* a)
 	y += show(">", "Monospace 7", boxX + 8, y, green, textWidth) + 2;
 	{
 		// a sentence that wraps keeps its > on each line
-		const std::string sentence = "Special thanks goes to Haiku and Linux for many years computer fun!";
+		const std::string sentence = "Special thanks goes to Haiku and Linux for many years of computer fun!";
 		PangoLayout* measure = TextLayout(cr, "> ", "Monospace 7", 0);
 		int prefixWidth = 0, prefixHeight = 0;
 		pango_layout_get_pixel_size(measure, &prefixWidth, &prefixHeight);
