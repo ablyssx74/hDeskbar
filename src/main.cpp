@@ -40,6 +40,7 @@
 #include "settings.h"
 #include "style.h"
 #include "toplevels.h"
+#include "tooltip.h"
 #include "tray.h"
 #include "util.h"
 #include "volume.h"
@@ -80,7 +81,9 @@ struct App {
 	GMainLoop* loop = nullptr;
 	int hoverTab = -1, hoverRow = -1;
 	bool clickFirst = false;
-	std::string debugClick, debugSubmenus, debugSettings;
+	std::string debugClick, debugSubmenus, debugSettings, debugTooltip;
+	std::string tipKey;
+	guint tipTimer = 0;
 	Placement shownPlacement = Placement::TopRight;
 	bool redrawQueued = false;
 	double pointerX = -1, pointerY = -1;
@@ -775,6 +778,9 @@ TrayCell* CellAt(double x, double y)
 	return nullptr;
 }
 
+void UpdateTooltip();
+void CancelTooltip();
+
 int TabAt(double x, double y)
 {
 	for (size_t i = 0; i < gLayout.tabs.size(); i++) {
@@ -806,6 +812,7 @@ void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface* surface, wl_fixed_t 
 	gApp.pointerX = wl_fixed_to_double(x);
 	gApp.pointerY = wl_fixed_to_double(y);
 	Redraw();
+	UpdateTooltip();
 }
 
 void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface* surface)
@@ -821,6 +828,7 @@ void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface* surface)
 	}
 	gApp.pointerX = gApp.pointerY = -1;
 	gApp.hoverTab = gApp.hoverRow = -1;
+	CancelTooltip();
 	Redraw();
 }
 
@@ -845,6 +853,7 @@ void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 		gApp.hoverRow = row;
 		Redraw();
 	}
+	UpdateTooltip();
 }
 
 // A click on a tray icon.
@@ -854,9 +863,109 @@ bool BarIsAtBottom()
 		|| gSettings.placement == Placement::BottomRight;
 }
 
+// ---- tooltips ----
+
+// What is under the pointer that has a tooltip, and what it says.
+struct TipTarget {
+	bool valid = false;
+	std::string key, text;
+	Rect rect;
+};
+
+TipTarget TipAt(double x, double y)
+{
+	TipTarget t;
+	auto done = [&](const std::string& key, const std::string& text, const Rect& rect) {
+		t.valid = !text.empty();
+		t.key = key;
+		t.text = text;
+		t.rect = rect;
+		return t;
+	};
+	char buffer[128];
+	if (gSettings.showVolume && gLayout.volume.Contains(x, y)) {
+		if (gVolume.muted || !gVolume.ready)
+			snprintf(buffer, sizeof(buffer), "Muted");
+		else
+			snprintf(buffer, sizeof(buffer), "Volume: %d%%", static_cast<int>(std::lround(gVolume.level * 100)));
+		return done("volume", buffer, gLayout.volume);
+	}
+	if (gSettings.showCpu && gLayout.graph.Contains(x, y)) {
+		snprintf(buffer, sizeof(buffer), "CPU: %d%%", static_cast<int>(std::lround(gApp.cpu.Average() * 100)));
+		return done("cpu", buffer, gLayout.graph);
+	}
+	if (gLayout.clock.Contains(x, y)) {
+		time_t now = time(nullptr);
+		struct tm local;
+		localtime_r(&now, &local);
+		strftime(buffer, sizeof(buffer), "%A, %B %-d, %Y", &local);
+		return done("clock", buffer, gLayout.clock);
+	}
+	for (const TrayCell& cell : gLayout.cells) {
+		if (cell.cell.Contains(x, y)) {
+			const std::string& name = cell.item->title.empty() ? cell.item->id : cell.item->title;
+			return done("cell:" + cell.item->service + cell.item->path, name, cell.cell);
+		}
+	}
+	for (const RowRect& row : gLayout.rows) {
+		if (row.row.Contains(x, y))
+			return done("row:" + std::to_string(row.window->uid), row.window->title, row.row);
+	}
+	for (const TabRect& tab : gLayout.tabs) {
+		if (tab.tab.Contains(x, y)) {
+			const Team& team = gLayout.teams[tab.team];
+			std::string text = team.name;
+			if (team.windows.size() > 1)
+				text += " (" + std::to_string(team.windows.size()) + " windows)";
+			else if (team.windows.size() == 1 && !team.windows[0]->title.empty() && team.windows[0]->title != team.name)
+				text += ": " + team.windows[0]->title;
+			return done("tab:" + team.key, text, tab.tab);
+		}
+	}
+	return t;
+}
+
+void CancelTooltip()
+{
+	if (gApp.tipTimer != 0) {
+		g_source_remove(gApp.tipTimer);
+		gApp.tipTimer = 0;
+	}
+	HideTooltip();
+	gApp.tipKey.clear();
+}
+
+// The pointer has moved on the bar: a tooltip comes when it rests on something that has one, and goes when it leaves.
+void UpdateTooltip()
+{
+	if (MenusOpen() || SettingsOwnsSurface(gWl.pointerSurface)) {
+		CancelTooltip();
+		return;
+	}
+	const TipTarget target = TipAt(gApp.pointerX, gApp.pointerY);
+	if (!target.valid) {
+		CancelTooltip();
+		return;
+	}
+	if (target.key == gApp.tipKey)
+		return;
+	CancelTooltip();
+	gApp.tipKey = target.key;
+	gApp.tipTimer = g_timeout_add(gApp.debugTooltip.empty() ? 450 : 50, [](gpointer) -> gboolean {
+		gApp.tipTimer = 0;
+		const TipTarget now = TipAt(gApp.pointerX, gApp.pointerY);
+		if (now.valid && now.key == gApp.tipKey) {
+			ShowTooltip(now.text, static_cast<int>(now.rect.x), static_cast<int>(now.rect.y), static_cast<int>(now.rect.w),
+				static_cast<int>(now.rect.h), BarIsAtBottom());
+		}
+		return G_SOURCE_REMOVE;
+	}, nullptr);
+}
+
 // A menu hanging from a rectangle of the bar: below it, or above when the bar is at the bottom of the screen.
 void OpenMenuAt(std::vector<MenuItem> items, const Rect& r)
 {
+	CancelTooltip();
 	MenuAnchor anchor;
 	anchor.x = static_cast<int>(r.x);
 	anchor.y = static_cast<int>(r.y);
@@ -933,6 +1042,7 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 {
 	if (serial != 0)
 		gWl.serial = serial;
+	CancelTooltip();
 	if (gWl.pointerSurface != gApp.surface && gWl.pointerSurface != nullptr) {
 		if (SettingsOwnsSurface(gWl.pointerSurface))
 			SettingsPointerButton(button, state);
@@ -1170,6 +1280,8 @@ int main(int argc, char** argv)
 			gApp.debugClick = argv[++i];		// for testing: tab:N, chevron:N or row:N, clicked a few seconds after the start
 		} else if (strcmp(argv[i], "--debug-submenus") == 0 && i + 1 < argc) {
 			gApp.debugSubmenus = argv[++i];		// for testing, after "--debug-click header": "2,5" opens row 2, then row 5 of that
+		} else if (strcmp(argv[i], "--debug-tooltip") == 0 && i + 1 < argc) {
+			gApp.debugTooltip = argv[++i];		// for testing: volume, cpu, clock, cell:N, tab:N or row:N: the pointer is put there
 		} else if (strcmp(argv[i], "--debug-settings") == 0 && i + 1 < argc) {
 			gApp.debugSettings = argv[++i];		// for testing: opens the settings window, then clicks "x,y;x,y;..." in it
 		} else if (strcmp(argv[i], "--debug") == 0) {
@@ -1288,6 +1400,30 @@ int main(int argc, char** argv)
 					break;
 				at = comma + 1;
 			}
+		});
+	}
+	if (!gApp.debugTooltip.empty()) {
+		RunAfter(6000, []() {
+			const std::string& what = gApp.debugTooltip;
+			const size_t colon = what.find(':');
+			const size_t n = colon == std::string::npos ? 0 : strtoul(what.c_str() + colon + 1, nullptr, 10);
+			const std::string kind = what.substr(0, colon);
+			Rect r;
+			if (kind == "volume")
+				r = gLayout.volume;
+			else if (kind == "cpu")
+				r = gLayout.graph;
+			else if (kind == "clock")
+				r = gLayout.clock;
+			else if (kind == "cell" && n < gLayout.cells.size())
+				r = gLayout.cells[n].cell;
+			else if (kind == "tab" && n < gLayout.tabs.size())
+				r = gLayout.tabs[n].tab;
+			else if (kind == "row" && n < gLayout.rows.size())
+				r = gLayout.rows[n].row;
+			gApp.pointerX = r.x + r.w / 2;
+			gApp.pointerY = r.y + r.h / 2;
+			UpdateTooltip();
 		});
 	}
 	if (!gApp.debugSettings.empty()) {
