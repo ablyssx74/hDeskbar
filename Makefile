@@ -15,7 +15,7 @@ GEN_DIR   = build
 
 PROTOCOLS = xdg-shell wlr-layer-shell-unstable-v1
 
-PKGS = wayland-client cairo pangocairo librsvg-2.0
+PKGS = wayland-client cairo pangocairo librsvg-2.0 gdk-pixbuf-2.0 gio-unix-2.0
 
 PROTO_HEADERS = $(patsubst %,$(GEN_DIR)/%-client-protocol.h,$(PROTOCOLS))
 PROTO_SOURCES = $(patsubst %,$(GEN_DIR)/%-protocol.c,$(PROTOCOLS))

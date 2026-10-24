@@ -11,7 +11,7 @@
 
 #include <cairo/cairo.h>
 #include <pango/pangocairo.h>
-#include <poll.h>
+#include <linux/input-event-codes.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <unistd.h>
@@ -31,7 +31,13 @@
 #undef namespace
 #include "cpu.h"
 #include "icon.h"
+#include "icons.h"
+#include "loop.h"
+#include "tray.h"
+#include "util.h"
 #include "xdg-shell-client-protocol.h"
+
+SystemTray gTray;
 
 namespace {
 
@@ -63,10 +69,16 @@ struct App {
 	zwlr_layer_shell_v1* layerShell = nullptr;
 	wl_surface* surface = nullptr;
 	zwlr_layer_surface_v1* layerSurface = nullptr;
+	wl_seat* seat = nullptr;
+	wl_pointer* pointer = nullptr;
+	GMainLoop* loop = nullptr;
+	bool showTray = true;
+	bool clickFirst = false;
+	bool redrawQueued = false;
+	double pointerX = -1, pointerY = -1;
 
 	Placement placement = Placement::TopRight;
 	int width = 150, height = 2 + kHeaderHeight + kRowHeight;		// what the bar asks for (a horizontal bar's width is the screen's)
-	bool running = true;
 	bool configured = false;
 	bool showCpu = true;
 	CpuSampler cpu;
@@ -78,6 +90,59 @@ App gApp;
 bool IsVertical(Placement p)
 {
 	return p != Placement::Top && p != Placement::Bottom;
+}
+
+
+struct Rect {
+	double x = 0, y = 0, w = 0, h = 0;
+
+	bool Contains(double px, double py) const { return px >= x && px < x + w && py >= y && py < y + h; }
+};
+
+struct TrayCell {
+	TrayItem* item;
+	Rect cell;
+};
+
+// Where everything is: worked out from the size of the bar and from what is in the tray, for drawing and for the pointer.
+struct Layout {
+	int width = 0, height = 0;		// what the bar needs (a horizontal bar's width is the screen's)
+	Rect header, graph, clock;
+	std::vector<TrayCell> cells;
+};
+
+constexpr int kCell = 22;				// a tray icon's cell
+constexpr int kTrayIcon = 16;
+constexpr int kHorizontalHeight = 26;
+
+Layout MakeLayout(int width, int height)
+{
+	Layout layout;
+	const std::vector<TrayItem*> items = gApp.showTray ? gTray.VisibleItems() : std::vector<TrayItem*>();
+	if (IsVertical(gApp.placement)) {
+		layout.width = width;
+		layout.header = { 1, 1, width - 2.0, kHeaderHeight };
+		layout.clock = { 1, 1.0 + kHeaderHeight, width - 2.0, kRowHeight };
+		layout.graph = { 7, 1.0 + kHeaderHeight + 3, kGraphWidth, kRowHeight - 6.0 };
+		const int columns = std::max(1, (width - 10) / kCell);
+		const int rows = (static_cast<int>(items.size()) + columns - 1) / columns;
+		const double top = 1.0 + kHeaderHeight + kRowHeight + 2;
+		for (size_t i = 0; i < items.size(); i++)
+			layout.cells.push_back({ items[i], { 5.0 + (i % columns) * kCell, top + (i / columns) * kCell, kCell, kCell } });
+		layout.height = 1 + kHeaderHeight + kRowHeight + (rows > 0 ? 2 + rows * kCell + 2 : 0) + 1;
+	} else {
+		layout.height = kHorizontalHeight;
+		layout.width = width;
+		layout.header = { 1, 1, kHeaderWidth, kHorizontalHeight - 2.0 };
+		layout.clock = { width - 111.0, 1, 110, kHorizontalHeight - 2.0 };
+		layout.graph = { layout.clock.x - kGraphWidth - 6, 4, kGraphWidth, kHorizontalHeight - 8.0 };
+		// (the first icon is the leftmost, the last the one next to the graph)
+		for (size_t i = 0; i < items.size(); i++) {
+			layout.cells.push_back({ items[i], { layout.graph.x - 6.0 - (items.size() - i) * kCell,
+				(kHorizontalHeight - kCell) / 2.0, kCell, kCell } });
+		}
+	}
+	return layout;
 }
 
 // ---- drawing ----
@@ -176,8 +241,43 @@ void DrawClock(cairo_t* cr, double x, double y, double w, double h)
 	g_object_unref(layout);
 }
 
-void Draw(cairo_t* cr, int width, int height)
+// The tray's icons, each in its cell, the one under the pointer lit.
+void DrawTray(cairo_t* cr, const Layout& layout)
 {
+	for (const TrayCell& cell : layout.cells) {
+		TrayItem* item = cell.item;
+		item->x = cell.cell.x;
+		item->y = cell.cell.y;
+		item->size = cell.cell.w;
+		if (cell.cell.Contains(gApp.pointerX, gApp.pointerY)) {
+			RoundedRectPath(cr, cell.cell.x, cell.cell.y, cell.cell.w, cell.cell.h, 4, 4, 4, 4);
+			cairo_set_source_rgba(cr, kAccent.r, kAccent.g, kAccent.b, 0.30);
+			cairo_fill(cr);
+		}
+		const bool attention = item->status == "NeedsAttention";
+		IconRef icon = attention && item->attentionPixmap ? item->attentionPixmap : item->pixmap;
+		if (!icon) {
+			const std::string& name = attention && !item->attentionIconName.empty() ? item->attentionIconName : item->iconName;
+			icon = CachedIcon(name, kTrayIcon, item->iconThemePath);
+		}
+		if (!icon)
+			icon = CachedIcon("application-x-executable", kTrayIcon);
+		if (!icon)
+			continue;
+		const double width = cairo_image_surface_get_width(icon.get()), height = cairo_image_surface_get_height(icon.get());
+		cairo_save(cr);
+		cairo_translate(cr, cell.cell.x + (cell.cell.w - kTrayIcon) / 2, cell.cell.y + (cell.cell.h - kTrayIcon) / 2);
+		cairo_scale(cr, kTrayIcon / width, kTrayIcon / height);
+		cairo_set_source_surface(cr, icon.get(), 0, 0);
+		cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BEST);
+		cairo_paint(cr);
+		cairo_restore(cr);
+	}
+}
+
+void Draw(cairo_t* cr, const Layout& layout)
+{
+	const int width = layout.width, height = layout.height;
 	// a corner that is a corner of the screen stays square; any other is round
 	double tl = kRadius, tr = kRadius, br = kRadius, bl = kRadius;
 	switch (gApp.placement) {
@@ -205,17 +305,16 @@ void Draw(cairo_t* cr, int width, int height)
 	cairo_stroke(cr);
 
 	const bool vertical = IsVertical(gApp.placement);
-	if (vertical) {
-		DrawHeader(cr, 1, 1, width - 2, kHeaderHeight, tl > 0 ? tl - 1 : 0, tr > 0 ? tr - 1 : 0, 8, 8);
-		DrawClock(cr, 1, 1 + kHeaderHeight, width - 2, kRowHeight);
-		if (gApp.showCpu)
-			DrawCpuGraph(cr, 7, 1 + kHeaderHeight + 3, kGraphWidth, kRowHeight - 6);
-	} else {
-		DrawHeader(cr, 1, 1, kHeaderWidth, height - 2, tl > 0 ? tl - 1 : 0, 8, 8, bl > 0 ? bl - 1 : 0);
-		DrawClock(cr, width - 110 - 1, 1, 110, height - 2);
-		if (gApp.showCpu)
-			DrawCpuGraph(cr, width - 110 - 1 - kGraphWidth - 6, 4, kGraphWidth, height - 8);
-	}
+	if (vertical)
+		DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0,
+			tr > 0 ? tr - 1 : 0, 8, 8);
+	else
+		DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0, 8, 8,
+			bl > 0 ? bl - 1 : 0);
+	DrawClock(cr, layout.clock.x, layout.clock.y, layout.clock.w, layout.clock.h);
+	if (gApp.showCpu)
+		DrawCpuGraph(cr, layout.graph.x, layout.graph.y, layout.graph.w, layout.graph.h);
+	DrawTray(cr, layout);
 }
 
 // ---- the buffer ----
@@ -227,8 +326,9 @@ void BufferRelease(void*, wl_buffer* buffer)
 
 const wl_buffer_listener kBufferListener = { BufferRelease };
 
-wl_buffer* MakeBuffer(int width, int height)
+wl_buffer* MakeBuffer(const Layout& layout)
 {
+	const int width = layout.width, height = layout.height;
 	const int stride = width * 4;
 	const int size = stride * height;
 	int fd = memfd_create("hdeskbar", MFD_CLOEXEC);
@@ -242,7 +342,7 @@ wl_buffer* MakeBuffer(int width, int height)
 	cairo_surface_t* surface = cairo_image_surface_create_for_data(
 		static_cast<unsigned char*>(data), CAIRO_FORMAT_ARGB32, width, height, stride);
 	cairo_t* cr = cairo_create(surface);
-	Draw(cr, width, height);
+	Draw(cr, layout);
 	cairo_destroy(cr);
 	cairo_surface_flush(surface);
 	cairo_surface_destroy(surface);
@@ -256,15 +356,118 @@ wl_buffer* MakeBuffer(int width, int height)
 	return buffer;
 }
 
-void Present(int width, int height)
+Layout gLayout;
+
+// Draws the bar. A vertical bar whose content has grown asks for another height first (and is drawn when the compositor has
+// answered); a horizontal one has the width of the screen.
+void Present()
 {
-	wl_buffer* buffer = MakeBuffer(width, height);
+	Layout layout = MakeLayout(gApp.width, gApp.height);
+	if (IsVertical(gApp.placement) && layout.height != gApp.height) {
+		gApp.height = layout.height;
+		zwlr_layer_surface_v1_set_size(gApp.layerSurface, gApp.width, gApp.height);
+		wl_surface_commit(gApp.surface);
+		return;
+	}
+	layout.width = gApp.width;
+	gLayout = layout;
+	wl_buffer* buffer = MakeBuffer(layout);
 	if (buffer == nullptr)
 		return;
 	wl_surface_attach(gApp.surface, buffer, 0, 0);
-	wl_surface_damage_buffer(gApp.surface, 0, 0, width, height);
+	wl_surface_damage_buffer(gApp.surface, 0, 0, layout.width, layout.height);
 	wl_surface_commit(gApp.surface);
 }
+
+// Draw again soon (once, however many things have changed).
+void Redraw()
+{
+	if (gApp.redrawQueued || !gApp.configured)
+		return;
+	gApp.redrawQueued = true;
+	RunLater([]() {
+		gApp.redrawQueued = false;
+		Present();
+	});
+}
+
+// ---- the pointer ----
+
+TrayCell* CellAt(double x, double y)
+{
+	for (TrayCell& cell : gLayout.cells) {
+		if (cell.cell.Contains(x, y))
+			return &cell;
+	}
+	return nullptr;
+}
+
+void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface*, wl_fixed_t x, wl_fixed_t y)
+{
+	gApp.pointerX = wl_fixed_to_double(x);
+	gApp.pointerY = wl_fixed_to_double(y);
+	Redraw();
+}
+
+void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface*)
+{
+	gApp.pointerX = gApp.pointerY = -1;
+	Redraw();
+}
+
+void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
+{
+	const double oldX = gApp.pointerX, oldY = gApp.pointerY;
+	gApp.pointerX = wl_fixed_to_double(x);
+	gApp.pointerY = wl_fixed_to_double(y);
+	// (only a move from one cell to another needs a new picture)
+	if (CellAt(oldX, oldY) != CellAt(gApp.pointerX, gApp.pointerY))
+		Redraw();
+}
+
+// A click on a tray icon.
+void ClickCell(TrayCell* cell, uint32_t button)
+{
+	const int x = static_cast<int>(cell->cell.x), y = static_cast<int>(cell->cell.y);
+	if (button == BTN_LEFT)
+		gTray.Activate(cell->item, x, y);
+	else if (button == BTN_RIGHT)
+		gTray.ContextMenu(cell->item, x, y);
+	else if (button == BTN_MIDDLE)
+		gTray.SecondaryActivate(cell->item, x, y);
+}
+
+void PointerButton(void*, wl_pointer*, uint32_t, uint32_t, uint32_t button, uint32_t state)
+{
+	if (state != WL_POINTER_BUTTON_STATE_RELEASED)
+		return;
+	TrayCell* cell = CellAt(gApp.pointerX, gApp.pointerY);
+	if (cell != nullptr)
+		ClickCell(cell, button);
+}
+
+void PointerAxis(void*, wl_pointer*, uint32_t, uint32_t, wl_fixed_t) {}
+void PointerFrame(void*, wl_pointer*) {}
+void PointerAxisSource(void*, wl_pointer*, uint32_t) {}
+void PointerAxisStop(void*, wl_pointer*, uint32_t, uint32_t) {}
+void PointerAxisDiscrete(void*, wl_pointer*, uint32_t, int32_t) {}
+
+const wl_pointer_listener kPointerListener = {
+	PointerEnter, PointerLeave, PointerMotion, PointerButton, PointerAxis, PointerFrame, PointerAxisSource,
+	PointerAxisStop, PointerAxisDiscrete, nullptr, nullptr, nullptr,
+};
+
+void SeatCapabilities(void*, wl_seat* seat, uint32_t capabilities)
+{
+	if ((capabilities & WL_SEAT_CAPABILITY_POINTER) && gApp.pointer == nullptr) {
+		gApp.pointer = wl_seat_get_pointer(seat);
+		wl_pointer_add_listener(gApp.pointer, &kPointerListener, nullptr);
+	}
+}
+
+void SeatName(void*, wl_seat*, const char*) {}
+
+const wl_seat_listener kSeatListener = { SeatCapabilities, SeatName };
 
 // ---- layer surface ----
 
@@ -276,12 +479,13 @@ void LayerConfigure(void*, zwlr_layer_surface_v1* layerSurface, uint32_t serial,
 	if (height > 0)
 		gApp.height = height;
 	gApp.configured = true;
-	Present(gApp.width, gApp.height);
+	Present();
 }
 
 void LayerClosed(void*, zwlr_layer_surface_v1*)
 {
-	gApp.running = false;
+	if (gApp.loop != nullptr)
+		g_main_loop_quit(gApp.loop);
 }
 
 const zwlr_layer_surface_v1_listener kLayerListener = { LayerConfigure, LayerClosed };
@@ -294,7 +498,10 @@ void RegistryGlobal(void*, wl_registry* registry, uint32_t name, const char* int
 		gApp.compositor = static_cast<wl_compositor*>(wl_registry_bind(registry, name, &wl_compositor_interface, 4));
 	else if (strcmp(interface, wl_shm_interface.name) == 0)
 		gApp.shm = static_cast<wl_shm*>(wl_registry_bind(registry, name, &wl_shm_interface, 1));
-	else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0)
+	else if (strcmp(interface, wl_seat_interface.name) == 0) {
+		gApp.seat = static_cast<wl_seat*>(wl_registry_bind(registry, name, &wl_seat_interface, std::min(version, 5u)));
+		wl_seat_add_listener(gApp.seat, &kSeatListener, nullptr);
+	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0)
 		gApp.layerShell = static_cast<zwlr_layer_shell_v1*>(
 			wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, std::min(version, 4u)));
 }
@@ -321,7 +528,7 @@ bool ParsePlacement(const std::string& name, Placement* placement)
 
 void Usage(const char* program)
 {
-	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu]\n", program);
+	fprintf(stderr, "usage: %s [--placement top-left|top-right|bottom-left|bottom-right|top|bottom] [--no-cpu] [--no-tray]\n", program);
 }
 
 }	// namespace
@@ -336,6 +543,12 @@ int main(int argc, char** argv)
 			}
 		} else if (strcmp(argv[i], "--no-cpu") == 0) {
 			gApp.showCpu = false;
+		} else if (strcmp(argv[i], "--no-tray") == 0) {
+			gApp.showTray = false;
+		} else if (strcmp(argv[i], "--click-first-tray-icon") == 0) {
+			gApp.clickFirst = true;		// for testing: a left and a right click on the first icon, after a few seconds
+		} else if (strcmp(argv[i], "--debug") == 0) {
+			gDebugEnabled = true;
 		} else if (strcmp(argv[i], "--version") == 0) {
 			printf("hdeskbar %s\n", APP_VERSION);
 			return 0;
@@ -386,46 +599,33 @@ int main(int argc, char** argv)
 	zwlr_layer_surface_v1_set_keyboard_interactivity(gApp.layerSurface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
 	wl_surface_commit(gApp.surface);
 
-	// the clock changes on the minute: wait for the compositor, or for the next minute, whichever comes first
-	int shown = -1;
-	long long sampledAt = 0;
-	gApp.cpu.Sample();
-	while (gApp.running) {
-		while (wl_display_prepare_read(gApp.display) != 0)
-			wl_display_dispatch_pending(gApp.display);
-		if (wl_display_flush(gApp.display) < 0 && errno != EAGAIN) {
-			wl_display_cancel_read(gApp.display);
-			break;
-		}
-		time_t now = time(nullptr);
-		const int toNextMinute = static_cast<int>((60 - now % 60) * 1000 + 50);
-		const int wait = gApp.showCpu ? std::min(toNextMinute, kRefreshMs) : toNextMinute;
-		pollfd descriptor = { wl_display_get_fd(gApp.display), POLLIN, 0 };
-		poll(&descriptor, 1, wait);
-		if (descriptor.revents & POLLIN) {
-			if (wl_display_read_events(gApp.display) < 0)
-				break;
-		} else
-			wl_display_cancel_read(gApp.display);
-		wl_display_dispatch_pending(gApp.display);
-
-		const int minute = static_cast<int>(time(nullptr) / 60);
-		bool redraw = minute != shown;
-		if (gApp.showCpu) {
-			// (only when the time is up: a wake-up for some other reason would give a sample of nothing)
-			timespec ts;
-			clock_gettime(CLOCK_MONOTONIC, &ts);
-			const long long ms = ts.tv_sec * 1000LL + ts.tv_nsec / 1000000;
-			if (ms - sampledAt >= kRefreshMs - 50) {
-				sampledAt = ms;
-				gApp.cpu.Sample();
-				redraw = true;
-			}
-		}
-		if (gApp.configured && redraw) {
-			shown = minute;
-			Present(gApp.width, gApp.height);
-		}
+	// the clock changes on the minute, and the CPU graph moves twice a second
+	gApp.loop = g_main_loop_new(nullptr, FALSE);
+	AttachWaylandSource(gApp.display, []() { g_main_loop_quit(gApp.loop); });
+	if (gApp.showTray) {
+		gTray.onChanged = []() { Redraw(); };
+		gTray.Init();
 	}
+	gApp.cpu.Sample();
+	static int shownMinute = -1;
+	g_timeout_add(kRefreshMs, [](gpointer) -> gboolean {
+		const int minute = static_cast<int>(time(nullptr) / 60);
+		if (gApp.showCpu) {
+			gApp.cpu.Sample();
+			Redraw();
+		} else if (minute != shownMinute)
+			Redraw();
+		shownMinute = minute;
+		return G_SOURCE_CONTINUE;
+	}, nullptr);
+	if (gApp.clickFirst) {
+		RunAfter(4000, []() {
+			if (!gLayout.cells.empty()) {
+				ClickCell(&gLayout.cells[0], BTN_LEFT);
+				ClickCell(&gLayout.cells[0], BTN_RIGHT);
+			}
+		});
+	}
+	g_main_loop_run(gApp.loop);
 	return 0;
 }

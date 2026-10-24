@@ -7,8 +7,8 @@ ProcessController, and a menu. It is drawn with cairo on a layer-shell surface, 
 It is a sibling of [hDesktop](https://github.com/ablyssx74/hDesktop) (the dock) and uses the same kind of backend: the
 compositor's window management protocols, StatusNotifierItem for the tray, PulseAudio for the volume.
 
-Status: **just started** (v0.3.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
-block), the CPU graph and the clock; nothing else is there yet.
+Status: **just started** (v0.4.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
+block), the CPU graph, the clock and the system tray; nothing else is there yet.
 
 ## Places
 - Vertical bars at the top left, top right, bottom left and bottom right of the screen.
@@ -17,13 +17,17 @@ block), the CPU graph and the clock; nothing else is there yet.
 A corner of the bar that is a corner of the screen stays square; every other corner is round, and the bar has the Deskbar's
 one pixel outline all round.
 
-    hdeskbar --placement top-left|top-right|bottom-left|bottom-right|top|bottom [--no-cpu]
+    hdeskbar --placement top-left|top-right|bottom-left|bottom-right|top|bottom [--no-cpu] [--no-tray] [--debug]
 
-`--no-cpu` leaves the CPU graph out (a setting will do that later).
+`--no-cpu` leaves the CPU graph out and `--no-tray` the tray (settings will do that later).
+
+The tray is a StatusNotifierHost (and the watcher too when nobody else is): left click activates an icon, right click opens its
+menu through the program's own ContextMenu call, middle click is the secondary action. The menus the programs describe over
+D-Bus (dbusmenu) will be drawn by hDeskbar itself when the menu code is in.
 
 ## Plan
 1. **Skeleton** (done): the layer-shell surface in the six places, the outline and the round corners.
-2. **Header, clock, CPU graph** (done), **tray.** A centered SnakeTracker icon as the header (it opens the menu), the clock, the tray
+2. **Header, clock, CPU graph, tray** (done). A centered SnakeTracker icon as the header (it opens the menu), the clock, the tray
    (StatusNotifierItem), and hDesktop's CPU graph in the place of ProcessController. The tray, the CPU graph and the volume
    control can each be turned off.
 3. **Volume control**, from hDesktop's, calmer and more like the Haiku Deskbar's.
@@ -37,7 +41,7 @@ one pixel outline all round.
 The Haiku Deskbar's four small corner layouts are not planned.
 
 ## Build
-Needs `wayland`, `cairo`, `pango` and `librsvg` (Arch / CachyOS package names).
+Needs `wayland`, `cairo`, `pango`, `librsvg`, `gdk-pixbuf2` and `glib2` (Arch / CachyOS package names).
 
     make
     ./hdeskbar --placement top-right
