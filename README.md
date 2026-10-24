@@ -7,8 +7,8 @@ ProcessController, and a menu. It is drawn with cairo on a layer-shell surface, 
 It is a sibling of [hDesktop](https://github.com/ablyssx74/hDesktop) (the dock) and uses the same kind of backend: the
 compositor's window management protocols, StatusNotifierItem for the tray, PulseAudio for the volume.
 
-Status: **just started** (v0.6.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
-block), the CPU graph, the clock, the volume slider, the system tray and the program tabs; the menu is not there yet.
+Status: **just started** (v0.7.0). It draws the bar in any of the six places, with the header (the SnakeTracker icon on a raised
+block) and its menu, the CPU graph, the clock, the volume slider, the system tray and the program tabs. Settings are not there yet.
 
 ## Places
 - Vertical bars at the top left, top right, bottom left and bottom right of the screen.
@@ -21,6 +21,11 @@ one pixel outline all round.
 
 `--no-cpu` leaves the CPU graph out, `--no-tray` the tray, `--no-volume` the volume slider and `--no-tabs` the program tabs (settings
 will do that later).
+
+**The menu.** A click on the header opens it: About, Applications (by category: Sound & Video, Development, Games, Graphics, Internet,
+Office, Science, Settings, System, Accessories, Other), Power (lock, log out, restart, shut down: the first two through `loginctl`, the
+others through `systemctl`) and Quit. It opens downward from a bar at the top of the screen and upward from one at the bottom; a
+long list scrolls with the wheel; a press outside closes it. Each menu is an `xdg_popup`, so the compositor puts it where it fits.
 
 **Program tabs.** One tab for each program that has windows, in the order they first appeared, with the program's icon and name.
 In a vertical bar the windows of a program are listed in a dark box under its tab (the chevron closes and opens the box); in a
@@ -49,7 +54,9 @@ D-Bus (dbusmenu) will be drawn by hDeskbar itself when the menu code is in.
 5. **The expanded view** (done) of the vertical bars: the dark box with each program's windows under its tab, in the shapes of
    SnakeTracker 1.0.51 (straight at the screen's edge, round at the other end).
 6. **The horizontal bars** (the tabs side by side are done; the list of a program's windows under its tab is not).
-7. **The menu** (an application menu built from `.desktop` files, in the snake trail look), opened from the header.
+7. **The menu** (done in a first form): the header opens a menu with the applications by category, power actions and quit.
+   Still to come: the snake trail joining the submenus, the tray's own (dbusmenu) menus, the CPU graph's menu, the window list of a
+   program in a horizontal bar, and tooltips.
 8. **Settings**, and a PKGBUILD.
 
 The Haiku Deskbar's four small corner layouts are not planned.

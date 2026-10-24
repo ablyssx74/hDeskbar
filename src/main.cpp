@@ -34,13 +34,18 @@
 #include "cpu.h"
 #include "icon.h"
 #include "icons.h"
+#include "leaf.h"
 #include "loop.h"
+#include "menu.h"
+#include "style.h"
 #include "toplevels.h"
 #include "tray.h"
 #include "util.h"
 #include "volume.h"
+#include "wl.h"
 #include "xdg-shell-client-protocol.h"
 
+WlGlobals gWl;
 SystemTray gTray;
 VolumeControl gVolume;
 ToplevelManager gToplevels;
@@ -50,11 +55,6 @@ namespace {
 
 enum class Placement { TopLeft, TopRight, BottomLeft, BottomRight, Top, Bottom };
 
-struct Color { double r, g, b; };
-
-constexpr Color kPanel = {200 / 255.0, 203 / 255.0, 235 / 255.0};	// the lavender panel
-constexpr Color kOutline = {20 / 255.0, 22 / 255.0, 30 / 255.0};	// the line round the bar
-constexpr Color kAccent = {70 / 255.0, 110 / 255.0, 200 / 255.0};	// the SnakeTracker color
 constexpr double kRadius = 7;
 constexpr int kHeaderHeight = 24;		// the block with the icon (a vertical bar)
 constexpr int kRowHeight = 24;			// the row of the clock, and later the CPU graph and the tray
@@ -63,10 +63,6 @@ constexpr int kIconSize = 20;
 constexpr int kGraphWidth = 56;
 constexpr int kRefreshMs = 500;		// how often the CPU graph moves
 
-Color Mix(const Color& a, const Color& b, double t)
-{
-	return { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t };
-}
 
 struct App {
 	wl_display* display = nullptr;
@@ -90,7 +86,7 @@ struct App {
 	bool volumeDrag = false;
 	bool volumeMute = false;	// the press began on the speaker
 	bool clickFirst = false;
-	std::string debugClick;
+	std::string debugClick, debugSubmenus;
 	bool redrawQueued = false;
 	double pointerX = -1, pointerY = -1;
 
@@ -312,25 +308,6 @@ Layout MakeLayout(int width, int height)
 }
 
 // ---- drawing ----
-
-void RoundedRectPath(cairo_t* cr, double x, double y, double w, double h, double tl, double tr, double br, double bl)
-{
-	cairo_new_sub_path(cr);
-	cairo_move_to(cr, x + tl, y);
-	cairo_line_to(cr, x + w - tr, y);
-	if (tr > 0)
-		cairo_arc(cr, x + w - tr, y + tr, tr, -M_PI / 2, 0);
-	cairo_line_to(cr, x + w, y + h - br);
-	if (br > 0)
-		cairo_arc(cr, x + w - br, y + h - br, br, 0, M_PI / 2);
-	cairo_line_to(cr, x + bl, y + h);
-	if (bl > 0)
-		cairo_arc(cr, x + bl, y + h - bl, bl, M_PI / 2, M_PI);
-	cairo_line_to(cr, x, y + tl);
-	if (tl > 0)
-		cairo_arc(cr, x + tl, y + tl, tl, M_PI, 3 * M_PI / 2);
-	cairo_close_path(cr);
-}
 
 // The block at the top of the bar (the Deskbar's leaf): a raised bar in the SnakeTracker color, with the icon in its middle.
 void DrawHeader(cairo_t* cr, double x, double y, double w, double h, double tl, double tr, double br, double bl)
@@ -846,15 +823,27 @@ int RowAt(double x, double y)
 	return -1;
 }
 
-void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface*, wl_fixed_t x, wl_fixed_t y)
+void PointerEnter(void*, wl_pointer*, uint32_t, wl_surface* surface, wl_fixed_t x, wl_fixed_t y)
 {
+	gWl.pointerSurface = surface;
+	if (surface != gApp.surface) {
+		if (MenuOwnsSurface(surface))
+			MenuPointerEnter(surface, wl_fixed_to_double(x), wl_fixed_to_double(y));
+		return;
+	}
 	gApp.pointerX = wl_fixed_to_double(x);
 	gApp.pointerY = wl_fixed_to_double(y);
 	Redraw();
 }
 
-void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface*)
+void PointerLeave(void*, wl_pointer*, uint32_t, wl_surface* surface)
 {
+	if (surface != gApp.surface) {
+		MenuPointerLeave();
+		if (gWl.pointerSurface == surface)
+			gWl.pointerSurface = nullptr;
+		return;
+	}
 	gApp.pointerX = gApp.pointerY = -1;
 	gApp.hoverTab = gApp.hoverRow = -1;
 	Redraw();
@@ -869,6 +858,10 @@ double VolumeAt(double x)
 
 void PointerMotion(void*, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
 {
+	if (gWl.pointerSurface != gApp.surface) {
+		MenuPointerMotion(wl_fixed_to_double(x), wl_fixed_to_double(y));
+		return;
+	}
 	const double oldX = gApp.pointerX, oldY = gApp.pointerY;
 	gApp.pointerX = wl_fixed_to_double(x);
 	gApp.pointerY = wl_fixed_to_double(y);
@@ -897,8 +890,27 @@ void ClickCell(TrayCell* cell, uint32_t button)
 		gTray.SecondaryActivate(cell->item, x, y);
 }
 
-void PointerButton(void*, wl_pointer*, uint32_t, uint32_t, uint32_t button, uint32_t state)
+// The menu that the header opens.
+void OpenLeafMenu()
 {
+	MenuAnchor anchor;
+	anchor.x = static_cast<int>(gLayout.header.x);
+	anchor.y = static_cast<int>(gLayout.header.y);
+	anchor.w = static_cast<int>(gLayout.header.w);
+	anchor.h = static_cast<int>(gLayout.header.h);
+	anchor.above = gApp.placement == Placement::Bottom || gApp.placement == Placement::BottomLeft
+		|| gApp.placement == Placement::BottomRight;
+	OpenMenu(LeafMenuItems(), anchor);
+}
+
+void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t button, uint32_t state)
+{
+	if (serial != 0)
+		gWl.serial = serial;
+	if (gWl.pointerSurface != gApp.surface && gWl.pointerSurface != nullptr) {
+		MenuPointerButton(button, state);
+		return;
+	}
 	// the volume: a press on the slider sets the level and drags it; a click on the speaker mutes
 	if (gApp.showVolume && button == BTN_LEFT) {
 		if (state == WL_POINTER_BUTTON_STATE_PRESSED && gLayout.volume.Contains(gApp.pointerX, gApp.pointerY)) {
@@ -927,6 +939,10 @@ void PointerButton(void*, wl_pointer*, uint32_t, uint32_t, uint32_t button, uint
 	}
 	if (button != BTN_LEFT)
 		return;
+	if (gLayout.header.Contains(gApp.pointerX, gApp.pointerY)) {
+		OpenLeafMenu();
+		return;
+	}
 	const int row = RowAt(gApp.pointerX, gApp.pointerY);
 	if (row >= 0) {
 		// a window of the program: bring it to the front
@@ -953,6 +969,11 @@ void PointerButton(void*, wl_pointer*, uint32_t, uint32_t, uint32_t button, uint
 // The wheel over the slider changes the volume, two percent a notch.
 void PointerAxis(void*, wl_pointer*, uint32_t, uint32_t axis, wl_fixed_t value)
 {
+	if (gWl.pointerSurface != gApp.surface && gWl.pointerSurface != nullptr) {
+		if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+			MenuPointerAxis(wl_fixed_to_double(value));
+		return;
+	}
 	if (!gApp.showVolume || axis != WL_POINTER_AXIS_VERTICAL_SCROLL || !gLayout.volume.Contains(gApp.pointerX, gApp.pointerY))
 		return;
 	const double notches = wl_fixed_to_double(value) / 10.0;
@@ -1003,6 +1024,13 @@ const zwlr_layer_surface_v1_listener kLayerListener = { LayerConfigure, LayerClo
 
 // ---- registry ----
 
+void WmBasePing(void*, xdg_wm_base* base, uint32_t serial)
+{
+	xdg_wm_base_pong(base, serial);
+}
+
+const xdg_wm_base_listener kWmBaseListener = { WmBasePing };
+
 // The height of the screen: a vertical bar is no taller than that.
 void OutputGeometry(void*, wl_output*, int32_t, int32_t, int32_t, int32_t, int32_t, const char*, const char*, int32_t) {}
 void OutputMode(void*, wl_output*, uint32_t flags, int32_t, int32_t height, int32_t)
@@ -1021,7 +1049,10 @@ void RegistryGlobal(void*, wl_registry* registry, uint32_t name, const char* int
 		gApp.compositor = static_cast<wl_compositor*>(wl_registry_bind(registry, name, &wl_compositor_interface, 4));
 	else if (strcmp(interface, wl_shm_interface.name) == 0)
 		gApp.shm = static_cast<wl_shm*>(wl_registry_bind(registry, name, &wl_shm_interface, 1));
-	else if (strcmp(interface, wl_output_interface.name) == 0 && gApp.output == nullptr) {
+	else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
+		gWl.wmBase = static_cast<xdg_wm_base*>(wl_registry_bind(registry, name, &xdg_wm_base_interface, std::min(version, 3u)));
+		xdg_wm_base_add_listener(gWl.wmBase, &kWmBaseListener, nullptr);
+	} else if (strcmp(interface, wl_output_interface.name) == 0 && gApp.output == nullptr) {
 		gApp.output = static_cast<wl_output*>(wl_registry_bind(registry, name, &wl_output_interface, 2));
 		wl_output_add_listener(gApp.output, &kOutputListener, nullptr);
 	} else if (strcmp(interface, org_kde_plasma_window_management_interface.name) == 0 && version >= 17) {
@@ -1086,6 +1117,8 @@ int main(int argc, char** argv)
 			gApp.clickFirst = true;		// for testing: a left and a right click on the first icon, after a few seconds
 		} else if (strcmp(argv[i], "--debug-click") == 0 && i + 1 < argc) {
 			gApp.debugClick = argv[++i];		// for testing: tab:N, chevron:N or row:N, clicked a few seconds after the start
+		} else if (strcmp(argv[i], "--debug-submenus") == 0 && i + 1 < argc) {
+			gApp.debugSubmenus = argv[++i];		// for testing, after "--debug-click header": "2,5" opens row 2, then row 5 of that
 		} else if (strcmp(argv[i], "--debug") == 0) {
 			gDebugEnabled = true;
 		} else if (strcmp(argv[i], "--version") == 0) {
@@ -1119,9 +1152,16 @@ int main(int argc, char** argv)
 		if (DesktopIs("KDE"))
 			WarnLog("On KDE Plasma, install hDeskbar (make install) so KWin gives it org_kde_plasma_window_management.\n");
 	}
+	gWl.display = gApp.display;
+	gWl.compositor = gApp.compositor;
+	gWl.shm = gApp.shm;
+	gWl.seat = gApp.seat;
+	gWl.screenHeight = gApp.outputHeight;
 	gApp.surface = wl_compositor_create_surface(gApp.compositor);
+	gWl.barSurface = gApp.surface;
 	gApp.layerSurface = zwlr_layer_shell_v1_get_layer_surface(gApp.layerShell, gApp.surface, nullptr,
 		ZWLR_LAYER_SHELL_V1_LAYER_TOP, "hdeskbar");
+	gWl.layerSurface = gApp.layerSurface;
 	zwlr_layer_surface_v1_add_listener(gApp.layerSurface, &kLayerListener, nullptr);
 
 	uint32_t anchor = 0;
@@ -1182,6 +1222,8 @@ int main(int argc, char** argv)
 				r = gLayout.tabs[n].chevron;
 			else if (what == "row" && n < gLayout.rows.size())
 				r = gLayout.rows[n].row;
+			else if (what == "header")
+				r = gLayout.header;
 			else {
 				DebugLog("debug click: nothing like %s\n", gApp.debugClick.c_str());
 				return;
@@ -1191,6 +1233,19 @@ int main(int argc, char** argv)
 			DebugLog("debug click at %g,%g\n", gApp.pointerX, gApp.pointerY);
 			PointerButton(nullptr, nullptr, 0, 0, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
 			PointerButton(nullptr, nullptr, 0, 0, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+		});
+	}
+	if (!gApp.debugSubmenus.empty()) {
+		RunAfter(7000, []() {
+			int level = 0;
+			const char* at = gApp.debugSubmenus.c_str();
+			while (*at != '\0') {
+				MenuDebugOpen(level++, atoi(at));
+				const char* comma = strchr(at, ',');
+				if (comma == nullptr)
+					break;
+				at = comma + 1;
+			}
 		});
 	}
 	if (gApp.clickFirst) {
