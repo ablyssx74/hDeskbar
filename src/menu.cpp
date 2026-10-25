@@ -762,9 +762,13 @@ void OpenMenu(std::vector<MenuItem> items, const MenuAnchor& anchor)
 		// beside the rectangle, level with its top (the way the Deskbar's menu opens from a bar at the side of the screen)
 		const bool left = anchor.side < 0;
 		raw->trailSide = -anchor.side;
-		Create(raw, nullptr, anchor.x, anchor.y, anchor.w, anchor.h,
-			left ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_TOP_RIGHT,
-			left ? XDG_POSITIONER_GRAVITY_BOTTOM_LEFT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT, -anchor.side * 5, 0,		// (over the bar's edge)
+		raw->barAbove = anchor.above;		// (a bar at the bottom of the screen: the menu goes up from its header, and the trail starts at the bottom)
+		// (the menu is level with the header's top, or with its bottom when the bar is at the bottom of the screen)
+		const uint32_t anchorEdge = anchor.above ? (left ? XDG_POSITIONER_ANCHOR_BOTTOM_LEFT : XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT)
+			: (left ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_TOP_RIGHT);
+		const uint32_t gravity = anchor.above ? (left ? XDG_POSITIONER_GRAVITY_TOP_LEFT : XDG_POSITIONER_GRAVITY_TOP_RIGHT)
+			: (left ? XDG_POSITIONER_GRAVITY_BOTTOM_LEFT : XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT);
+		Create(raw, nullptr, anchor.x, anchor.y, anchor.w, anchor.h, anchorEdge, gravity, -anchor.side * 5, 0,
 			XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X | XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y);
 		return;
 	}

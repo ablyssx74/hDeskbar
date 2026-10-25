@@ -246,28 +246,21 @@ Layout MakeLayout(int width, int height)
 	const std::vector<TrayItem*> items = gSettings.showTray ? gTray.VisibleItems() : std::vector<TrayItem*>();
 	if (IsVertical(gSettings.placement)) {
 		layout.width = width;
-		layout.header = { 1, 1, width - 2.0, kHeaderHeight };
-		layout.clock = { 1, 1.0 + kHeaderHeight, width - 2.0, kRowHeight };
-		layout.graph = { 7, 1.0 + kHeaderHeight + 3, kGraphWidth, kRowHeight - 6.0 };
-		// the icons: the speaker first, then the tray's, a row of them after another
+		const bool flushRight = gSettings.placement == Placement::TopRight || gSettings.placement == Placement::BottomRight;
+		const bool atBottom = gSettings.placement == Placement::BottomLeft || gSettings.placement == Placement::BottomRight;
+		// The bar runs flush into the edges of the screen it hangs on, with no outline there: the header reaches the edge of
+		// the screen, and so do the tabs. At the bottom of the screen the header, the clock and the tray come last, so the
+		// block that is nearest the edge is the header in either place, and the tabs run away from it.
+		const double headerH = kHeaderHeight + 1.0, edgeX = flushRight ? 1.0 : 0.0, edgeW = width - 1.0;
+		const double tabX = flushRight ? 3 : 0, tabW = width - 3.0;
 		const int columns = std::max(1, (width - 10) / kCell);
 		const int count = static_cast<int>(items.size()) + (gSettings.showVolume ? 1 : 0);
 		const int rows = (count + columns - 1) / columns;
-		const double top = 1.0 + kHeaderHeight + kRowHeight + 2;
-		int slot = 0;
-		if (gSettings.showVolume) {
-			layout.volume = { 5.0, top, kCell, kCell };
-			slot++;
-		}
-		for (size_t i = 0; i < items.size(); i++, slot++)
-			layout.cells.push_back({ items[i], { 5.0 + (slot % columns) * kCell, top + (slot / columns) * kCell, kCell, kCell } });
-		double y = 1.0 + kHeaderHeight + kRowHeight + (rows > 0 ? 2 + rows * kCell + 2 : 0);
-		// the tabs: a program's tab, and under it, when it is open, the dark box with its windows. At the edge of the screen
-		// they run flush, and are round at the other end.
+		const double trayH = rows > 0 ? 2 + rows * kCell + 2 : 0;
+
+		// the tabs: a program's tab, and under it, when it is open, the dark box with its windows
 		layout.teams = BuildTeams();
-		const bool flushRight = gSettings.placement == Placement::TopRight || gSettings.placement == Placement::BottomRight;
-		const double tabX = flushRight ? 3 : 1, tabW = width - 4.0;
-		y += 2;
+		double y = atBottom ? 3.0 : headerH + kRowHeight + trayH + 2;
 		for (size_t t = 0; t < layout.teams.size(); t++) {
 			const Team& team = layout.teams[t];
 			const Rect tab = { tabX, y, tabW, kTabHeight };
@@ -283,9 +276,46 @@ Layout MakeLayout(int width, int height)
 			}
 			y += 3;
 		}
-		layout.height = static_cast<int>(std::ceil(y)) + 1;
-		if (gApp.outputHeight > 0)
-			layout.height = std::min(layout.height, gApp.outputHeight);
+
+		// the icons (the speaker first, then the tray's, a row of them after another), the clock and the header
+		double trayTop, clockTop, headerTop;
+		if (atBottom) {
+			trayTop = y + 2;
+			clockTop = y + trayH;
+			headerTop = clockTop + kRowHeight;
+			y = headerTop + headerH;
+		} else {
+			headerTop = 0;
+			clockTop = headerH;
+			trayTop = headerH + kRowHeight + 2;
+		}
+		layout.header = { edgeX, headerTop, edgeW, headerH };
+		layout.clock = { 1, clockTop, width - 2.0, kRowHeight };
+		layout.graph = { 7, clockTop + 3, kGraphWidth, kRowHeight - 6.0 };
+		int slot = 0;
+		if (gSettings.showVolume) {
+			layout.volume = { 5.0, trayTop, kCell, kCell };
+			slot++;
+		}
+		for (size_t i = 0; i < items.size(); i++, slot++)
+			layout.cells.push_back({ items[i], { 5.0 + (slot % columns) * kCell, trayTop + (slot / columns) * kCell, kCell, kCell } });
+
+		layout.height = static_cast<int>(std::ceil(atBottom ? y : y + 1));
+		if (gApp.outputHeight > 0 && layout.height > gApp.outputHeight) {
+			// (too much for the screen: what does not fit is cut off at the far end, so at the bottom the header stays)
+			const double shift = atBottom ? gApp.outputHeight - layout.height : 0.0;
+			layout.height = gApp.outputHeight;
+			if (shift != 0.0) {
+				layout.header.y += shift;
+				layout.clock.y += shift;
+				layout.graph.y += shift;
+				layout.volume.y += shift;
+				for (TrayCell& c : layout.cells) c.cell.y += shift;
+				for (TabRect& t : layout.tabs) { t.tab.y += shift; t.chevron.y += shift; }
+				for (RowRect& r : layout.rows) r.row.y += shift;
+				for (BoxRect& b : layout.boxes) b.box.y += shift;
+			}
+		}
 	} else {
 		layout.height = kHorizontalHeight;
 		layout.width = width;
@@ -665,15 +695,18 @@ void Draw(cairo_t* cr, const Layout& layout)
 {
 	const int width = layout.width, height = layout.height;
 	// a corner that is a corner of the screen stays square; any other is round
+	// (a vertical bar runs flush into the side of the screen it hangs on, so both of its corners there are square)
 	double tl = kRadius, tr = kRadius, br = kRadius, bl = kRadius;
 	switch (gSettings.placement) {
-		case Placement::TopLeft: tl = 0; break;
-		case Placement::TopRight: tr = 0; break;
-		case Placement::BottomLeft: bl = 0; break;
-		case Placement::BottomRight: br = 0; break;
+		case Placement::TopLeft: tl = bl = 0; break;
+		case Placement::TopRight: tr = br = 0; break;
+		case Placement::BottomLeft: bl = tl = 0; break;
+		case Placement::BottomRight: br = tr = 0; break;
 		case Placement::Top: tl = tr = 0; break;
 		case Placement::Bottom: bl = br = 0; break;
 	}
+	const bool vertical = IsVertical(gSettings.placement);
+	const bool atBottom = gSettings.placement == Placement::BottomLeft || gSettings.placement == Placement::BottomRight;
 
 	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
 	cairo_paint(cr);
@@ -684,17 +717,29 @@ void Draw(cairo_t* cr, const Layout& layout)
 	cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
 	cairo_fill_preserve(cr);
 	cairo_new_path(cr);
+	cairo_save(cr);
+	if (vertical) {
+		// no outline along the edges of the screen: the bar goes on into them
+		const bool left = gSettings.placement == Placement::TopLeft || gSettings.placement == Placement::BottomLeft;
+		const double x0 = left ? 1 : 0, x1 = left ? width : width - 1, y0 = atBottom ? 0 : 1, y1 = atBottom ? height - 1 : height;
+		cairo_rectangle(cr, x0, y0, x1 - x0, y1 - y0);
+		cairo_clip(cr);
+	}
 	RoundedRectPath(cr, 0.5, 0.5, width - 1, height - 1, std::max(0.0, tl - 0.5), std::max(0.0, tr - 0.5),
 		std::max(0.0, br - 0.5), std::max(0.0, bl - 0.5));
 	cairo_set_source_rgb(cr, kOutline.r, kOutline.g, kOutline.b);
 	cairo_set_line_width(cr, 1);
 	cairo_stroke(cr);
+	cairo_restore(cr);
 
-	const bool vertical = IsVertical(gSettings.placement);
-	if (vertical)
-		DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0,
-			tr > 0 ? tr - 1 : 0, 8, 8);
-	else
+	if (vertical) {
+		if (atBottom)
+			DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, 8, 8, br > 0 ? br - 1 : 0,
+				bl > 0 ? bl - 1 : 0);
+		else
+			DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0,
+				tr > 0 ? tr - 1 : 0, 8, 8);
+	} else
 		DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0, 8, 8,
 			bl > 0 ? bl - 1 : 0);
 	DrawClock(cr, layout.clock.x, layout.clock.y, layout.clock.w, layout.clock.h);
