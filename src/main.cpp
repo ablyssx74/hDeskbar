@@ -733,12 +733,13 @@ void Draw(cairo_t* cr, const Layout& layout)
 	cairo_restore(cr);
 
 	if (vertical) {
+		// (the header is straight along the side of the screen it hangs on, both ends; the other side is round)
 		if (atBottom)
-			DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, 8, 8, br > 0 ? br - 1 : 0,
-				bl > 0 ? bl - 1 : 0);
+			DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? 8 : 0, tr > 0 ? 8 : 0,
+				br > 0 ? br - 1 : 0, bl > 0 ? bl - 1 : 0);
 		else
 			DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0,
-				tr > 0 ? tr - 1 : 0, 8, 8);
+				tr > 0 ? tr - 1 : 0, br > 0 ? 8 : 0, bl > 0 ? 8 : 0);
 	} else
 		DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0, 8, 8,
 			bl > 0 ? bl - 1 : 0);
