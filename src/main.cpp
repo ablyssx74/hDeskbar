@@ -1361,6 +1361,9 @@ void RegistryGlobal(void*, wl_registry* registry, uint32_t name, const char* int
 		gApp.compositor = static_cast<wl_compositor*>(wl_registry_bind(registry, name, &wl_compositor_interface, 4));
 	else if (strcmp(interface, wl_shm_interface.name) == 0)
 		gApp.shm = static_cast<wl_shm*>(wl_registry_bind(registry, name, &wl_shm_interface, 1));
+	else if (strcmp(interface, zxdg_decoration_manager_v1_interface.name) == 0)
+		gWl.decorationManager = static_cast<zxdg_decoration_manager_v1*>(
+			wl_registry_bind(registry, name, &zxdg_decoration_manager_v1_interface, 1));
 	else if (strcmp(interface, xdg_wm_base_interface.name) == 0) {
 		gWl.wmBase = static_cast<xdg_wm_base*>(wl_registry_bind(registry, name, &xdg_wm_base_interface, std::min(version, 3u)));
 		xdg_wm_base_add_listener(gWl.wmBase, &kWmBaseListener, nullptr);

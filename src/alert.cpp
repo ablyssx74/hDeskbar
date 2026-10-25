@@ -35,6 +35,7 @@ struct Alert {
 	wl_surface* surface = nullptr;
 	xdg_surface* xdgSurface = nullptr;
 	xdg_toplevel* toplevel = nullptr;
+	zxdg_toplevel_decoration_v1* decoration = nullptr;		// (the About window draws its own frame, with round corners)
 };
 
 std::vector<std::unique_ptr<Alert>> gAlerts;
@@ -69,8 +70,10 @@ Box ButtonBox(const Alert* a, size_t i)
 	return { right - (fromRight + 1) * kButtonWidth - fromRight * kGap, a->height - 20.0 - kButtonHeight, kButtonWidth, kButtonHeight };
 }
 
-// The About window: the name, the icon, what it is, and a little shell with the thanks. Drawn on a 360 x 427 page, which is enlarged.
+// The About window: the name, the icon, what it is, and a little shell with the thanks. Drawn on a page that is enlarged (see below).
 constexpr double kAboutScale = 1.1;
+constexpr double kAboutWidth = 432, kAboutHeight = 461;		// of the page that is enlarged (the page was 360 x 427 before it was made 20% wider)
+constexpr double kAboutRadius = 14;
 
 void PaintAbout(cairo_t* cr, const Alert* a)
 {
@@ -100,11 +103,11 @@ void PaintAbout(cairo_t* cr, const Alert* a)
 		int w = 0, h = 0;
 		pango_layout_get_pixel_size(layout, &w, &h);
 		cairo_set_source_rgb(cr, 0, 0, 0);
-		cairo_move_to(cr, (360 - w) / 2.0, 170);
+		cairo_move_to(cr, (kAboutWidth - w) / 2.0, 170);
 		pango_cairo_show_layout(cr, layout);
 		g_object_unref(layout);
 	}
-	const double boxX = 38, boxY = 198, boxW = 360 - 76, boxH = 172;
+	const double boxX = 38, boxY = 198, boxW = kAboutWidth - 76, boxH = 206;
 	RoundedRectPath(cr, boxX, boxY, boxW, boxH, 12, 12, 12, 12);
 	cairo_set_source_rgb(cr, 0, 0, 0);
 	cairo_fill(cr);
@@ -121,7 +124,7 @@ void PaintAbout(cairo_t* cr, const Alert* a)
 	};
 	// the biggest size at which every line fits without wrapping (and where one cannot, the line wraps)
 	char termFont[32] = "Monospace 5.5";
-	for (double size = 7.0; size >= 5.5; size -= 0.25) {
+	for (double size = 9.0; size >= 5.5; size -= 0.25) {
 		snprintf(termFont, sizeof(termFont), "Monospace %.2f", size);
 		bool fits = true;
 		for (const char* line : lines) {
@@ -170,8 +173,20 @@ void Paint(Alert* a)
 	if (!a->configured)
 		return;
 	wl_buffer* buffer = NewShmBuffer(a->width, a->height, [a](cairo_t* cr) {
-		cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
-		cairo_paint(cr);
+		if (a->about) {
+			// (round corners: the frame is drawn here, and what is outside the corners stays see-through)
+			RoundedRectPath(cr, 0, 0, a->width, a->height, kAboutRadius, kAboutRadius, kAboutRadius, kAboutRadius);
+			cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
+			cairo_fill(cr);
+			RoundedRectPath(cr, 0.5, 0.5, a->width - 1, a->height - 1, kAboutRadius - 0.5, kAboutRadius - 0.5, kAboutRadius - 0.5,
+				kAboutRadius - 0.5);
+			cairo_set_source_rgb(cr, kOutline.r, kOutline.g, kOutline.b);
+			cairo_set_line_width(cr, 1);
+			cairo_stroke(cr);
+		} else {
+			cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
+			cairo_paint(cr);
+		}
 		if (a->about) {
 			cairo_save(cr);
 			PaintAbout(cr, a);
@@ -221,6 +236,8 @@ void Remove(Alert* a)
 {
 	if (gOver == a)
 		gOver = nullptr;
+	if (a->decoration != nullptr)
+		zxdg_toplevel_decoration_v1_destroy(a->decoration);
 	if (a->toplevel != nullptr)
 		xdg_toplevel_destroy(a->toplevel);
 	if (a->xdgSurface != nullptr)
@@ -306,6 +323,11 @@ void ShowAlert(const std::string& title, const std::string& text, std::vector<st
 	xdg_toplevel_set_app_id(a->toplevel, "hdeskbar");
 	xdg_toplevel_set_min_size(a->toplevel, a->width, a->height);
 	xdg_toplevel_set_max_size(a->toplevel, a->width, a->height);
+	if (gWl.decorationManager != nullptr) {
+		// no frame from the window system: the window draws its own, and is moved by dragging it
+		a->decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(gWl.decorationManager, a->toplevel);
+		zxdg_toplevel_decoration_v1_set_mode(a->decoration, ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+	}
 	wl_surface_commit(a->surface);
 	gAlerts.push_back(std::move(alert));
 }
@@ -357,7 +379,18 @@ void AlertPointerMotion(double x, double y)
 
 void AlertPointerButton(uint32_t button, uint32_t state)
 {
-	if (gOver == nullptr || button != BTN_LEFT || state != WL_POINTER_BUTTON_STATE_RELEASED)
+	if (gOver == nullptr || button != BTN_LEFT)
+		return;
+	if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+		// (a window that has no frame of the window system is moved by taking hold of it anywhere that is not a button)
+		bool onButton = false;
+		for (size_t i = 0; i < gOver->buttons.size(); i++)
+			onButton |= ButtonBox(gOver, i).Contains(gX, gY);
+		if (gOver->about && !onButton && gOver->decoration != nullptr)
+			xdg_toplevel_move(gOver->toplevel, gWl.seat, gWl.serial);
+		return;
+	}
+	if (state != WL_POINTER_BUTTON_STATE_RELEASED)
 		return;
 	for (size_t i = 0; i < gOver->buttons.size(); i++) {
 		if (ButtonBox(gOver, i).Contains(gX, gY)) {
@@ -378,8 +411,8 @@ void ShowAbout()
 	auto alert = std::make_unique<Alert>();
 	Alert* a = alert.get();
 	a->about = true;
-	a->width = static_cast<int>(360 * kAboutScale);
-	a->height = static_cast<int>(427 * kAboutScale);
+	a->width = static_cast<int>(kAboutWidth * kAboutScale);
+	a->height = static_cast<int>(kAboutHeight * kAboutScale);
 	a->title = "About hDeskbar";
 	a->buttons = { "Close" };
 	a->defaultButton = 0;

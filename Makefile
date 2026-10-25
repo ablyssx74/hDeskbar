@@ -13,7 +13,7 @@ TARGET    = hdeskbar
 PROTO_DIR = protocols
 GEN_DIR   = build
 
-PROTOCOLS = xdg-shell wlr-layer-shell-unstable-v1 plasma-window-management wlr-foreign-toplevel-management-unstable-v1 viewporter fractional-scale-v1
+PROTOCOLS = xdg-shell wlr-layer-shell-unstable-v1 plasma-window-management wlr-foreign-toplevel-management-unstable-v1 viewporter fractional-scale-v1 xdg-decoration-unstable-v1
 
 PKGS = wayland-client cairo pangocairo librsvg-2.0 gdk-pixbuf-2.0 gio-unix-2.0 libpulse libpulse-mainloop-glib libcurl
 
