@@ -117,7 +117,7 @@ void PaintAbout(cairo_t* cr, const Alert* a)
 		"https://www.haiku-os.org/",
 		"",
 		"hDeskbar is MIT licensed, by ablyss.",
-		"https://github.com/ablyssx74/hDesktop",
+		"https://github.com/ablyssx74/hDeskbar",
 	};
 	// the biggest size at which every line fits without wrapping (and where one cannot, the line wraps)
 	char termFont[32] = "Monospace 5.5";
