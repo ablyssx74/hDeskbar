@@ -86,3 +86,25 @@ IconRef AboutMenuIcon(int size)
 	cairo_surface_reference(surface);
 	return MakeIconRef(surface);
 }
+
+void DrawSnakeTrackerShadow(cairo_t* cr, double x, double y, int size, double dx, double dy, double alpha)
+{
+	cairo_matrix_t matrix;
+	cairo_get_matrix(cr, &matrix);
+	const double scale = matrix.xx > 0 ? matrix.xx : 1;
+	const int pixels = static_cast<int>(std::lround(size * scale));
+	cairo_surface_t* icon = Render(&gBar, kSnakeTrackerSvg, sizeof(kSnakeTrackerSvg), pixels);
+	if (icon == nullptr)
+		return;
+	// the shape is used as a mask a few times, a little apart, so the edge is soft
+	static const double spread[][2] = { {0, 0}, {-1.5, 0}, {1.5, 0}, {0, -1.5}, {0, 1.5}, {-1, -1}, {1, 1}, {-1, 1}, {1, -1} };
+	const double each = alpha / 4.0;
+	for (const auto& s : spread) {
+		cairo_save(cr);
+		cairo_translate(cr, x + dx + s[0], y + dy + s[1]);
+		cairo_scale(cr, size / static_cast<double>(pixels), size / static_cast<double>(pixels));
+		cairo_set_source_rgba(cr, 0, 0, 0, each);
+		cairo_mask_surface(cr, icon, 0, 0);
+		cairo_restore(cr);
+	}
+}

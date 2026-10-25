@@ -65,7 +65,7 @@ constexpr double kRadius = 7;
 constexpr int kHeaderHeight = 24;		// the block with the icon (a vertical bar)
 constexpr int kRowHeight = 24;			// the row of the clock, and later the CPU graph and the tray
 constexpr int kHeaderWidth = 48;		// the same block in a horizontal bar
-constexpr int kIconSize = 20;
+constexpr int kIconSize = 24;			// the icon in the header of a vertical bar (a horizontal bar's is a little smaller)
 constexpr int kGraphWidth = 56;
 constexpr int kRefreshMs = 500;		// how often the CPU graph moves
 
@@ -375,7 +375,8 @@ void DrawHeader(cairo_t* cr, double x, double y, double w, double h, double tl, 
 	cairo_set_line_width(cr, 1);
 	cairo_stroke(cr);
 
-	DrawSnakeTrackerIcon(cr, x + std::floor((w - kIconSize) / 2), y + std::floor((h - kIconSize) / 2), kIconSize);
+	const int size = h >= kIconSize + 1 ? kIconSize : kIconSize - 2;
+	DrawSnakeTrackerIcon(cr, x + std::floor((w - size) / 2), y + std::floor((h - size) / 2), size);
 }
 
 // The CPU graph, in the place of ProcessController: a dark box with one bar for each processor.

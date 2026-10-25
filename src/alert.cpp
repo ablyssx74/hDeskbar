@@ -85,36 +85,76 @@ void PaintAbout(cairo_t* cr, const Alert* a)
 		g_object_unref(layout);
 		return h;
 	};
-	show("hDeskbar", "Monospace Bold 15", 18, 24, { 0.10, 0.10, 0.16 });
+	// the name, in gold with a dark shadow
+	{
+		const char* font = "Monospace Bold 21";
+		show("hDeskbar", font, 12.0 + 1.5, 6.0 + 1.5, { 0.18, 0.14, 0.02 });
+		show("hDeskbar", font, 12, 6, { 0.98, 0.80, 0.12 });
+	}
+	// the icon, with its shadow behind it
+	DrawSnakeTrackerShadow(cr, 22, 54, 112, 5, 6, 0.55);
 	DrawSnakeTrackerIcon(cr, 22, 54, 112);
-	show("A Haiku Deskbar for Linux", "Monospace Bold Italic 10", 106, 160, { 0, 0, 0 });
+	// what it is, in the middle under the icon
+	{
+		PangoLayout* layout = TextLayout(cr, "A Haiku Deskbar for Linux", "Monospace Bold Italic 10", 0);
+		int w = 0, h = 0;
+		pango_layout_get_pixel_size(layout, &w, &h);
+		cairo_set_source_rgb(cr, 0, 0, 0);
+		cairo_move_to(cr, (360 - w) / 2.0, 170);
+		pango_cairo_show_layout(cr, layout);
+		g_object_unref(layout);
+	}
 	const double boxX = 38, boxY = 198, boxW = 360 - 76, boxH = 172;
 	RoundedRectPath(cr, boxX, boxY, boxW, boxH, 12, 12, 12, 12);
 	cairo_set_source_rgb(cr, 0, 0, 0);
 	cairo_fill(cr);
-	// the text wraps inside the box, leaving room for the scroll bar on the right
-	const int textWidth = static_cast<int>(boxW - 8 - 30);
-	const Color purple = { 0.55, 0.10, 0.60 }, green = { 0.10, 0.62, 0.10 };
+	// the text wraps inside the box, leaving room for the scroll bar on the right; a line that wraps keeps its > on each part
+	const int textWidth = static_cast<int>(boxW - 8 - 20);
+	const Color gold = { 0.96, 0.66, 0.12 }, green = { 0.40, 0.95, 0.40 };
 	double y = boxY + 18;
-	y += show("Welcome to the hDeskbar Shell", "Monospace 7", boxX + 8, y, purple, textWidth) + 8;
-	y += show(">", "Monospace 7", boxX + 8, y, green, textWidth) + 2;
-	{
-		// a sentence that wraps keeps its > on each line
-		const std::string sentence = "Special thanks goes to Haiku and Linux for many years of computer fun!";
-		PangoLayout* measure = TextLayout(cr, "> ", "Monospace 7", 0);
-		int prefixWidth = 0, prefixHeight = 0;
-		pango_layout_get_pixel_size(measure, &prefixWidth, &prefixHeight);
-		g_object_unref(measure);
-		PangoLayout* wrapped = TextLayout(cr, sentence, "Monospace 7", textWidth - prefixWidth);
-		const int lines = pango_layout_get_line_count(wrapped);
-		for (int i = 0; i < lines; i++) {
-			PangoLayoutLine* line = pango_layout_get_line_readonly(wrapped, i);
-			y += show("> " + sentence.substr(line->start_index, line->length), "Monospace 7", boxX + 8, y, green, 0);
+	static const char* const lines[] = {
+		"Inspiration for the hDeskbar comes from Haiku.",
+		"https://www.haiku-os.org/",
+		"",
+		"hDeskbar is MIT licensed, by ablyss.",
+		"https://github.com/ablyssx74/hDesktop",
+	};
+	// the biggest size at which every line fits without wrapping (and where one cannot, the line wraps)
+	char termFont[32] = "Monospace 5.5";
+	for (double size = 7.0; size >= 5.5; size -= 0.25) {
+		snprintf(termFont, sizeof(termFont), "Monospace %.2f", size);
+		bool fits = true;
+		for (const char* line : lines) {
+			PangoLayout* one = TextLayout(cr, std::string("> ") + line, termFont, 0);
+			int w = 0, h = 0;
+			pango_layout_get_pixel_size(one, &w, &h);
+			g_object_unref(one);
+			if (w > textWidth)
+				fits = false;
+		}
+		if (fits)
+			break;
+	}
+	y += show("Welcome to hDeskbar Shell", termFont, boxX + 8, y, gold, textWidth) + 8;
+	PangoLayout* measure = TextLayout(cr, "> ", termFont, 0);
+	int prefixWidth = 0, prefixHeight = 0;
+	pango_layout_get_pixel_size(measure, &prefixWidth, &prefixHeight);
+	g_object_unref(measure);
+	for (const char* line : lines) {
+		const std::string text = line;
+		if (text.empty()) {
+			y += 10;
+			continue;
+		}
+		PangoLayout* wrapped = TextLayout(cr, text, termFont, textWidth - prefixWidth);
+		const int count = pango_layout_get_line_count(wrapped);
+		for (int i = 0; i < count; i++) {
+			PangoLayoutLine* part = pango_layout_get_line_readonly(wrapped, i);
+			y += show("> " + text.substr(part->start_index, part->length), termFont, boxX + 8, y, green, 0);
 		}
 		g_object_unref(wrapped);
-		y += 14 - 2;
+		y += 2;
 	}
-	show("> exit", "Monospace 7", boxX + 8, y, green, textWidth);
 	// a scroll bar that does not scroll: its track, and the pill that slides in it
 	const double barX = boxX + boxW - 16, barW = 7;
 	RoundedRectPath(cr, barX, boxY + 12, barW, boxH - 24, 3.5, 3.5, 3.5, 3.5);
