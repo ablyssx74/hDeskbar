@@ -26,7 +26,7 @@ namespace {
 
 constexpr int kWidth = 360, kHeight = 430;
 
-enum Kind { kCheckTabs, kCheckTray, kCheckCpu, kCheckVolume, kCheck24, kCheckSeconds, kCheckTop, kCheckRaise, kCheckHide, kCheckUpdates, kPlace, kColor, kClose };
+enum Kind { kCheckTabs, kCheckTray, kCheckCpu, kCheckVolume, kCheck24, kCheckSeconds, kCheckTop, kCheckRaise, kCheckHide, kCheckUpdates, kCheckExpand, kPlace, kColor, kClose };
 
 struct Hit {
 	double x, y, w, h;
@@ -69,6 +69,7 @@ void MakeHits(Window* w)
 	w->hits.push_back({ right, 68, 140, 22, kCheckRaise, 0 });
 	w->hits.push_back({ right, 92, 140, 22, kCheckHide, 0 });
 	w->hits.push_back({ right, 116, 140, 22, kCheckUpdates, 0 });
+	w->hits.push_back({ right, 140, 140, 22, kCheckExpand, 0 });
 	for (int i = 0; i < 6; i++)
 		w->hits.push_back({ left + (i % 2) * 160.0, 222 + (i / 2) * 24.0, 150, 22, kPlace, i });
 	w->hits.push_back({ left, 340, 150, 30, kColor, 0 });
@@ -103,6 +104,7 @@ bool Checked(Kind kind)
 		case kCheckRaise: return gSettings.autoRaise;
 		case kCheckHide: return gSettings.autoHide;
 		case kCheckUpdates: return gSettings.checkForUpdates;
+		case kCheckExpand: return gSettings.expandTabs;
 		default: return false;
 	}
 }
@@ -134,8 +136,9 @@ void Paint(Window* w)
 				case kCheckTop:
 				case kCheckRaise:
 				case kCheckHide:
-				case kCheckUpdates: {
-					static const char* const labels[] = { "Program tabs", "System tray", "CPU graph", "Volume icon", "24-hour clock", "Seconds in the clock", "Always on top", "Auto-raise", "Auto-hide", "Check for updates" };
+				case kCheckUpdates:
+				case kCheckExpand: {
+					static const char* const labels[] = { "Program tabs", "System tray", "CPU graph", "Volume icon", "24-hour clock", "Seconds in the clock", "Always on top", "Auto-raise", "Auto-hide", "Check for updates", "Expanding tabs" };
 					const double bx = hit.x, by = hit.y + (hit.h - 14) / 2;
 					RoundedRectPath(cr, bx, by, 14, 14, 3, 3, 3, 3);
 					cairo_set_source_rgb(cr, 1, 1, 1);
@@ -320,6 +323,7 @@ void SettingsPointerButton(uint32_t button, uint32_t state)
 		case kCheckRaise: gSettings.autoRaise = !gSettings.autoRaise; break;
 		case kCheckHide: gSettings.autoHide = !gSettings.autoHide; break;
 		case kCheckUpdates: gSettings.checkForUpdates = !gSettings.checkForUpdates; break;
+		case kCheckExpand: gSettings.expandTabs = !gSettings.expandTabs; break;
 		case kPlace: gSettings.placement = kPlaces[hit.index].placement; break;
 		case kColor:
 			OpenColorWindow("Accent color", gSettings.accent, Color{ 70 / 255.0, 110 / 255.0, 200 / 255.0 },

@@ -72,6 +72,7 @@ void LoadSettings()
 		flag("always_on_top", &gSettings.alwaysOnTop);
 		flag("auto_raise", &gSettings.autoRaise);
 		flag("auto_hide", &gSettings.autoHide);
+		flag("expand_tabs", &gSettings.expandTabs);
 		flag("check_for_updates", &gSettings.checkForUpdates);
 		char* place = g_key_file_get_string(file, "hdeskbar", "placement", nullptr);
 		if (place != nullptr) {
@@ -103,6 +104,7 @@ void SaveSettings()
 	g_key_file_set_boolean(file, "hdeskbar", "always_on_top", gSettings.alwaysOnTop);
 	g_key_file_set_boolean(file, "hdeskbar", "auto_raise", gSettings.autoRaise);
 	g_key_file_set_boolean(file, "hdeskbar", "auto_hide", gSettings.autoHide);
+	g_key_file_set_boolean(file, "hdeskbar", "expand_tabs", gSettings.expandTabs);
 	g_key_file_set_boolean(file, "hdeskbar", "check_for_updates", gSettings.checkForUpdates);
 	g_key_file_set_string(file, "hdeskbar", "placement", PlacementName(gSettings.placement));
 	char accent[16];

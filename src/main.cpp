@@ -273,7 +273,7 @@ Layout MakeLayout(int width, int height)
 			const Rect tab = { tabX, y, tabW, kTabHeight };
 			layout.tabs.push_back({ tab, { tab.x + tab.w - 22, y, 20, kTabHeight }, t });
 			y += kTabHeight;
-			if (!team.collapsed && !team.windows.empty()) {
+			if (gSettings.expandTabs && !team.collapsed && !team.windows.empty()) {
 				const double boxX = flushRight ? tabX + 5 : tabX, boxW = tabW - 5;
 				const Rect box = { boxX, y - 6, boxW, 6.0 + team.windows.size() * kWindowRow + 4 };
 				layout.boxes.push_back({ box, t });
@@ -555,7 +555,7 @@ void DrawTab(cairo_t* cr, const TabRect& tr, const Team& team, bool vertical, bo
 
 	const double leftEdge = flush < 0 ? r.x + 8 : r.x + 10;
 	DrawIconAt(cr, team.iconName, leftEdge, r.y + (r.h - 16) / 2, 16);
-	const bool chevron = vertical || team.windows.size() > 1;
+	const bool chevron = (vertical && gSettings.expandTabs) || team.windows.size() > 1;
 	const double labelRight = chevron ? tr.chevron.x : r.x + r.w - 12;
 	DrawLabel(cr, team.name, leftEdge + 22, r.y, labelRight - (leftEdge + 22), r.h, {1, 1, 1});
 
@@ -1212,11 +1212,12 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 	if (tab >= 0) {
 		const TabRect& hit = gLayout.tabs[tab];
 		const Team& team = gLayout.teams[hit.team];
-		if (IsVertical(gSettings.placement) && hit.chevron.Contains(gApp.pointerX, gApp.pointerY)) {
+		const bool expanding = IsVertical(gSettings.placement) && gSettings.expandTabs;
+		if (expanding && hit.chevron.Contains(gApp.pointerX, gApp.pointerY)) {
 			gCollapsed[team.key] = !team.collapsed;
 			Redraw();
-		} else if (!IsVertical(gSettings.placement) && team.windows.size() > 1) {
-			// (in a vertical bar the windows are in the box under the tab)
+		} else if (!expanding && team.windows.size() > 1) {
+			// (in an expanding bar the windows are in the box under the tab)
 			OpenWindowList(tab);
 		} else if (team.latest != nullptr) {
 			// the program's tab: its last window comes to the front; a lone window that is in front goes away
