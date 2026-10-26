@@ -251,9 +251,10 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 		bottom = std::min(bottom, h);
 		if (bottom > top) {
 			const bool extTop = top < pTop - 0.5f, extBottom = bottom > pBottom + 0.5f;
-			// (a bar that starts at the edge of the menu, from the Deskbar, is straight there)
-			const float outerT = extTop ? kR : 0.0f, innerT = (extTop || (fromBar && top <= 0.5f)) ? 0.0f : kR;
-			const float outerB = extBottom ? kR : 0.0f, innerB = (extBottom || (fromBar && bottom >= h - 0.5f)) ? 0.0f : kR;
+			// (a bar that starts at the edge of the menu, from the Deskbar, is straight at its outer edge, and round on the inside when
+			// it hangs from the top of the bar)
+			const float outerT = extTop ? kR : 0.0f, innerT = (extTop || (fromBar && top <= 0.5f && p->barAbove)) ? 0.0f : kR;
+			const float outerB = extBottom ? kR : 0.0f, innerB = (extBottom || (fromBar && bottom >= h - 0.5f && !p->barAbove)) ? 0.0f : kR;
 			if (parentOnLeft)
 				pieces.push_back({ 0, top, kBarW, bottom - top, outerT, innerT, innerB, outerB });
 			else
@@ -276,8 +277,8 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 	// the pill: the corner next to the parent is square, and so is the one at the bottom when this level ends within its parent's height
 	const bool overParent = (parent != nullptr || fromBar) && p->trailSide != 0;
 	const bool squareBottom = overParent && parent != nullptr && p->popupY + p->height <= parent->height;
-	const double tlR = (overParent && parentOnLeft && !(fromBar && p->barAbove)) ? 0.0 : kMenuRadius, trR = (overParent && !parentOnLeft) ? 0.0 : kMenuRadius;
-	const double blR = ((squareBottom || (fromBar && p->barAbove)) && parentOnLeft) ? 0.0 : kMenuRadius, brR = (squareBottom && !parentOnLeft) ? 0.0 : kMenuRadius;
+	const double tlR = (overParent && parentOnLeft && !(fromBar && p->barAbove)) ? 0.0 : kMenuRadius, trR = (overParent && !parentOnLeft && !(fromBar && p->barAbove)) ? 0.0 : kMenuRadius;
+	const double blR = ((squareBottom || (fromBar && p->barAbove)) && parentOnLeft) ? 0.0 : kMenuRadius, brR = ((squareBottom || (fromBar && p->barAbove)) && !parentOnLeft) ? 0.0 : kMenuRadius;
 	RoundedRectPath(cr, 0, 0, w, h, tlR, trR, brR, blR);
 	cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
 	cairo_fill(cr);

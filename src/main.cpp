@@ -348,8 +348,10 @@ Layout MakeLayout(int width, int height)
 
 // ---- drawing ----
 
+bool FlushRight();
+
 // The block at the top of the bar (the Deskbar's leaf): a raised bar in the SnakeTracker color, with the icon in its middle.
-void DrawHeader(cairo_t* cr, double x, double y, double w, double h, double tl, double tr, double br, double bl)
+void DrawHeader(cairo_t* cr, double x, double y, double w, double h, double tl, double tr, double br, double bl, int flush)
 {
 	// the soft shade under the block
 	for (int i = 3; i >= 1; i--) {
@@ -358,15 +360,26 @@ void DrawHeader(cairo_t* cr, double x, double y, double w, double h, double tl, 
 		cairo_fill(cr);
 	}
 
+	// raised like the tabs and the trail of the menus, in the SnakeTracker color
 	cairo_pattern_t* gradient = cairo_pattern_create_linear(0, y, 0, y + h);
-	const Color light = Mix(kAccent, {1, 1, 1}, 0.30), dark = Mix(kAccent, {0, 0, 0}, 0.22);
+	const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
 	cairo_pattern_add_color_stop_rgb(gradient, 0, light.r, light.g, light.b);
-	cairo_pattern_add_color_stop_rgb(gradient, 0.55, kAccent.r, kAccent.g, kAccent.b);
+	cairo_pattern_add_color_stop_rgb(gradient, 0.5, kAccent.r, kAccent.g, kAccent.b);
 	cairo_pattern_add_color_stop_rgb(gradient, 1, dark.r, dark.g, dark.b);
 	RoundedRectPath(cr, x, y, w, h, tl, tr, br, bl);
 	cairo_set_source(cr, gradient);
 	cairo_fill(cr);
 	cairo_pattern_destroy(gradient);
+
+	// the 30% at the side of the menu keeps its color, then it melts into the panel's towards the edge of the screen
+	const bool towardLeft = flush < 0;
+	cairo_pattern_t* fade = cairo_pattern_create_linear(towardLeft ? x + w * 0.7 : x + w * 0.3, 0, towardLeft ? x : x + w, 0);
+	cairo_pattern_add_color_stop_rgba(fade, 0, kPanel.r, kPanel.g, kPanel.b, 0);
+	cairo_pattern_add_color_stop_rgba(fade, 1, kPanel.r, kPanel.g, kPanel.b, 0.6);
+	RoundedRectPath(cr, x, y, w, h, tl, tr, br, bl);
+	cairo_set_source(cr, fade);
+	cairo_fill(cr);
+	cairo_pattern_destroy(fade);
 
 	// a fine light line along the top edge
 	RoundedRectPath(cr, x + 0.5, y + 0.5, w - 1, h - 1, std::max(0.0, tl - 0.5), std::max(0.0, tr - 0.5),
@@ -559,8 +572,10 @@ void DrawTab(cairo_t* cr, const TabRect& tr, const Team& team, bool vertical, bo
 	cairo_fill(cr);
 	cairo_pattern_destroy(raised);
 
-	// the left 30% keeps its color, then it melts into the panel's
-	cairo_pattern_t* fade = cairo_pattern_create_linear(r.x + r.w * 0.3, 0, r.x + r.w, 0);
+	// the 30% at the side of the menu keeps its color, then it melts into the panel's towards the edge of the screen
+	const bool towardLeft = flush < 0;
+	cairo_pattern_t* fade = cairo_pattern_create_linear(towardLeft ? r.x + r.w * 0.7 : r.x + r.w * 0.3, 0,
+		towardLeft ? r.x : r.x + r.w, 0);
 	cairo_pattern_add_color_stop_rgba(fade, 0, kPanel.r, kPanel.g, kPanel.b, 0);
 	cairo_pattern_add_color_stop_rgba(fade, 1, kPanel.r, kPanel.g, kPanel.b, 0.6);
 	BarShape(cr, r, flush);
@@ -737,13 +752,13 @@ void Draw(cairo_t* cr, const Layout& layout)
 		// (the header is straight along the side of the screen it hangs on, both ends; the other side is round)
 		if (atBottom)
 			DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? 8 : 0, tr > 0 ? 8 : 0,
-				br > 0 ? br - 1 : 0, bl > 0 ? bl - 1 : 0);
+				br > 0 ? br - 1 : 0, bl > 0 ? bl - 1 : 0, FlushRight() ? 1 : -1);
 		else
 			DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0,
-				tr > 0 ? tr - 1 : 0, br > 0 ? 8 : 0, bl > 0 ? 8 : 0);
+				tr > 0 ? tr - 1 : 0, br > 0 ? 8 : 0, bl > 0 ? 8 : 0, FlushRight() ? 1 : -1);
 	} else
 		DrawHeader(cr, layout.header.x, layout.header.y, layout.header.w, layout.header.h, tl > 0 ? tl - 1 : 0, 8, 8,
-			bl > 0 ? bl - 1 : 0);
+			bl > 0 ? bl - 1 : 0, 0);
 	DrawClock(cr, layout.clock.x, layout.clock.y, layout.clock.w, layout.clock.h);
 	if (gSettings.showCpu)
 		DrawCpuGraph(cr, layout.graph.x, layout.graph.y, layout.graph.w, layout.graph.h);
