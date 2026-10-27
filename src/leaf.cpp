@@ -16,9 +16,12 @@
 #include <glib/gstdio.h>
 
 #include <algorithm>
+#include <dirent.h>
 #include <fstream>
 #include <map>
 #include <set>
+#include <thread>
+#include <cstdlib>
 
 #include "apps.h"
 #include "settings.h"
@@ -261,6 +264,100 @@ std::vector<MenuItem> RecentFileItems(bool folders)
 
 // ---- the volumes ----
 
+struct UnmountedVolume {
+	std::string device, label;
+};
+
+// the value of KEY="..." in a line of `lsblk -P` (lsblk writes odd characters as \xHH)
+static std::string PairValue(const std::string& line, const char* key)
+{
+	const std::string find = std::string(key) + "=\"";
+	size_t at = 0;
+	while ((at = line.find(find, at)) != std::string::npos && at != 0 && line[at - 1] != ' ')
+		at += find.size();
+	if (at == std::string::npos)
+		return "";
+	at += find.size();
+	std::string value;
+	for (size_t i = at; i < line.size() && line[i] != '"'; i++) {
+		if (line[i] == '\\' && i + 3 < line.size() && line[i + 1] == 'x') {
+			value += static_cast<char>(std::strtol(line.substr(i + 2, 2).c_str(), nullptr, 16));
+			i += 3;
+		} else
+			value += line[i];
+	}
+	return value;
+}
+
+static std::vector<UnmountedVolume> UnmountedVolumes()
+{
+	std::vector<UnmountedVolume> volumes;
+	FILE* pipe = popen("lsblk -P -o PATH,LABEL,FSTYPE,MOUNTPOINT,SIZE,TYPE 2>/dev/null", "r");
+	if (pipe == nullptr)
+		return volumes;
+	char buffer[2048];
+	while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+		const std::string line = buffer;
+		const std::string type = PairValue(line, "TYPE"), fs = PairValue(line, "FSTYPE");
+		if (fs.empty() || !PairValue(line, "MOUNTPOINT").empty())
+			continue;
+		if (type.rfind("loop", 0) == 0 || fs == "swap" || fs == "LVM2_member" || fs == "crypto_LUKS" || fs == "linux_raid_member"
+			|| fs == "zfs_member" || fs == "squashfs")
+			continue;
+		UnmountedVolume volume;
+		volume.device = PairValue(line, "PATH");
+		std::string name = PairValue(line, "LABEL");
+		if (name.empty())
+			name = volume.device.substr(volume.device.rfind('/') + 1);
+		const std::string size = PairValue(line, "SIZE");
+		volume.label = size.empty() ? name : name + " (" + size + ")";
+		volumes.push_back(volume);
+	}
+	pclose(pipe);
+	return volumes;
+}
+
+static std::string MakeFileUri(const std::string& path)
+{
+	char* uri = g_filename_to_uri(path.c_str(), nullptr, nullptr);
+	const std::string result = uri != nullptr ? uri : "file://" + path;
+	g_free(uri);
+	return result;
+}
+
+// mounts a volume with udisks and opens it; the mounting waits for the answer in a thread of its own
+static void MountAndOpen(const std::string& device)
+{
+	std::thread([device]() {
+		const std::string command = "udisksctl mount -b '" + device + "' 2>&1";
+		FILE* pipe = popen(command.c_str(), "r");
+		if (pipe == nullptr)
+			return;
+		std::string output;
+		char buffer[512];
+		while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
+			output += buffer;
+		pclose(pipe);
+		// "Mounted /dev/sdb1 at /run/media/user/LABEL." (or "... is already mounted at `/path'.")
+		size_t at = output.rfind(" at ");
+		if (at == std::string::npos)
+			return;
+		std::string path = output.substr(at + 4);
+		while (!path.empty() && (path.back() == '\n' || path.back() == '.' || path.back() == '\'' || path.back() == ' '))
+			path.pop_back();
+		if (!path.empty() && (path[0] == '`' || path[0] == '\''))
+			path.erase(0, 1);
+		if (path.empty() || path[0] != '/')
+			return;
+		g_idle_add([](gpointer data) -> gboolean {
+			std::string* uri = static_cast<std::string*>(data);
+			OpenUri(*uri);
+			delete uri;
+			return G_SOURCE_REMOVE;
+		}, new std::string(MakeFileUri(path)));
+	}).detach();
+}
+
 std::vector<MenuItem> MountItems()
 {
 	std::vector<MenuItem> items;
@@ -286,41 +383,17 @@ std::vector<MenuItem> MountItems()
 	}
 	g_list_free_full(mounts, g_object_unref);
 
-	// a volume that is not mounted yet: choosing it mounts it, and opens it
-	GList* volumes = g_volume_monitor_get_volumes(monitor);
-	for (GList* l = volumes; l != nullptr; l = l->next) {
-		GVolume* volume = G_VOLUME(l->data);
-		GMount* mount = g_volume_get_mount(volume);
-		if (mount != nullptr) {
-			g_object_unref(mount);
-			continue;
-		}
-		if (!g_volume_can_mount(volume))
-			continue;
-		char* name = g_volume_get_name(volume);
+	// the volumes that are not mounted: dimmed, and choosing one mounts it (udisks, as the desktop's file manager does) and
+	// opens it. They come from lsblk: the volume monitor of GIO only knows them when gvfs' udisks monitor runs.
+	for (const UnmountedVolume& volume : UnmountedVolumes()) {
 		MenuItem item;
-		item.label = std::string(name) + " (not mounted)";
-		item.iconName = "drive-removable-media";
-		g_object_ref(volume);
-		item.action = [volume]() {
-			g_volume_mount(volume, G_MOUNT_MOUNT_NONE, nullptr, nullptr, [](GObject* source, GAsyncResult* result, gpointer) {
-				GVolume* v = G_VOLUME(source);
-				if (g_volume_mount_finish(v, result, nullptr)) {
-					if (GMount* mounted = g_volume_get_mount(v)) {
-						GFile* root = g_mount_get_root(mounted);
-						char* uri = g_file_get_uri(root);
-						OpenUri(uri);
-						g_free(uri);
-						g_object_unref(root);
-						g_object_unref(mounted);
-					}
-				}
-			}, nullptr);
-		};
+		item.label = volume.label;
+		item.iconName = "drive-harddisk";
+		item.dim = true;
+		const std::string device = volume.device;
+		item.action = [device]() { MountAndOpen(device); };
 		items.push_back(item);
-		g_free(name);
 	}
-	g_list_free_full(volumes, g_object_unref);
 	g_object_unref(monitor);
 
 	if (items.empty()) {
@@ -328,6 +401,120 @@ std::vector<MenuItem> MountItems()
 		none.label = "No volumes";
 		none.enabled = false;
 		items.push_back(none);
+	}
+	return items;
+}
+
+// ---- browsing the files ----
+
+// the icon names of a folder: its own for the home and the folders the desktop knows, else the plain one
+static std::string FolderIcons(const std::string& path)
+{
+	if (path == "/")
+		return "drive-harddisk";
+	if (path == g_get_home_dir())
+		return "user-home,folder-home,folder";
+	static const std::vector<std::pair<GUserDirectory, const char*> > special = {
+		{ G_USER_DIRECTORY_DESKTOP, "user-desktop" }, { G_USER_DIRECTORY_DOCUMENTS, "folder-documents" },
+		{ G_USER_DIRECTORY_DOWNLOAD, "folder-download" }, { G_USER_DIRECTORY_MUSIC, "folder-music" },
+		{ G_USER_DIRECTORY_PICTURES, "folder-pictures" }, { G_USER_DIRECTORY_PUBLIC_SHARE, "folder-publicshare" },
+		{ G_USER_DIRECTORY_TEMPLATES, "folder-templates" }, { G_USER_DIRECTORY_VIDEOS, "folder-videos" },
+	};
+	for (const auto& place : special) {
+		const char* directory = g_get_user_special_dir(place.first);
+		if (directory != nullptr && path == directory)
+			return std::string(place.second) + ",folder";
+	}
+	return "folder,inode-directory";
+}
+
+static std::string FileIcons(const std::string& name)
+{
+	std::string icons;
+	char* type = g_content_type_guess(name.c_str(), nullptr, 0, nullptr);
+	GIcon* icon = type != nullptr ? g_content_type_get_icon(type) : nullptr;
+	if (icon != nullptr && G_IS_THEMED_ICON(icon)) {
+		const char* const* names = g_themed_icon_get_names(G_THEMED_ICON(icon));
+		for (int i = 0; names != nullptr && names[i] != nullptr; i++)
+			icons += std::string(i ? "," : "") + names[i];
+	}
+	if (icon != nullptr)
+		g_object_unref(icon);
+	g_free(type);
+	return icons.empty() ? "text-x-generic" : icons;
+}
+
+// The contents of a folder as a menu, like Tracker's folder menus: the folders first, then the files, hidden ones left out;
+// hovering a folder opens it as a submenu, choosing a folder or a file opens it (a file in its program).
+static std::vector<MenuItem> FolderItems(const std::string& directory)
+{
+	std::vector<MenuItem> items;
+	DIR* dir = opendir(directory.c_str());
+	if (dir == nullptr) {
+		items.push_back(MenuItem::Header("Can't read this folder"));
+		return items;
+	}
+	struct Entry {
+		std::string name, key;
+		bool folder;
+	};
+	std::vector<Entry> entries;
+	while (struct dirent* entry = readdir(dir)) {
+		if (entry->d_name[0] == '.')
+			continue;
+		const std::string full = (directory == "/" ? "" : directory) + "/" + entry->d_name;
+		const bool folder = entry->d_type == DT_DIR
+			|| ((entry->d_type == DT_LNK || entry->d_type == DT_UNKNOWN) && g_file_test(full.c_str(), G_FILE_TEST_IS_DIR));
+		char* folded = g_utf8_casefold(entry->d_name, -1);
+		char* key = g_utf8_collate_key_for_filename(folded, -1);
+		entries.push_back({ entry->d_name, key, folder });
+		g_free(key);
+		g_free(folded);
+	}
+	closedir(dir);
+	std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+		return a.folder != b.folder ? a.folder : a.key < b.key;
+	});
+	// a folder like /usr/bin holds thousands: past this many, the last row opens the folder itself
+	const size_t most = 1000;
+	for (size_t i = 0; i < entries.size() && i < most; i++) {
+		const std::string full = (directory == "/" ? "" : directory) + "/" + entries[i].name;
+		MenuItem item;
+		item.label = entries[i].name;
+		item.action = [full]() { OpenUri(MakeFileUri(full)); };
+		if (entries[i].folder) {
+			item.clickActs = true;
+			item.iconName = FolderIcons(full);
+			item.submenu = [full]() { return FolderItems(full); };
+		} else
+			item.iconName = FileIcons(entries[i].name);
+		items.push_back(item);
+	}
+	if (entries.size() > most) {
+		items.push_back(MenuItem::Separator());
+		MenuItem more;
+		more.label = "Open folder to see " + std::to_string(entries.size() - most) + " more...";
+		more.iconName = "folder-open";
+		more.action = [directory]() { OpenUri(MakeFileUri(directory)); };
+		items.push_back(more);
+	}
+	return items;
+}
+
+static std::vector<MenuItem> BrowseItems()
+{
+	std::vector<MenuItem> items;
+	const std::string home = g_get_home_dir();
+	for (const std::pair<std::string, std::string>& place : { std::make_pair(std::string("/"), std::string("/")),
+			std::make_pair(std::string("Home"), home) }) {
+		MenuItem item;
+		item.label = place.first;
+		item.iconName = FolderIcons(place.second);
+		const std::string path = place.second;
+		item.action = [path]() { OpenUri(MakeFileUri(path)); };
+		item.submenu = [path]() { return FolderItems(path); };
+		item.clickActs = true;
+		items.push_back(item);
 	}
 	return items;
 }
@@ -476,6 +663,10 @@ std::vector<MenuItem> LeafMenuItems()
 	items.push_back(shutdown);
 	items.push_back(MenuItem::Separator());
 
+	MenuItem browse;
+	browse.label = "Browse";
+	browse.submenu = BrowseItems;
+	items.push_back(browse);
 	MenuItem documents;
 	documents.label = "Recent documents";
 	documents.submenu = []() { return RecentFileItems(false); };

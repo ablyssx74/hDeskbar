@@ -27,8 +27,10 @@ struct MenuItem {
 	MenuCheck check = kCheckNone;
 	bool separator = false;
 	bool enabled = true;
+	bool dim = false;				// drawn dimmed, but still to be chosen (a volume that is not mounted yet)
 	std::function<void()> action;
 	std::function<std::vector<MenuItem>()> submenu;		// the items of the submenu, made when it opens
+	bool clickActs = false;			// a row with a submenu that also does its action when it is clicked (a folder: it opens)
 	bool header = false;			// a title: dim, and not for choosing
 	bool noArrow = false;			// a submenu that has no arrow on its row (the CPU graph's, like ProcessController's)
 	unsigned liveMs = 0;			// the submenu is made again this often while it is open

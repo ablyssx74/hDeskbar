@@ -413,7 +413,7 @@ void Paint(Popup* p)
 				continue;
 			}
 			const bool lit = litRow[i] != 0;
-			const double alpha = item.enabled ? 1.0 : 0.45;
+			const double alpha = item.enabled && !item.dim ? 1.0 : 0.45;
 			const double checkWidth = p->checkRoom, markX = p->checkRoom ? 0 : 6;
 			const bool on = item.check == kCheckOn || item.check == kRadioOn;
 			if (item.check != kCheckNone) {
@@ -872,7 +872,7 @@ void MenuPointerButton(uint32_t, uint32_t state)
 	const int row = ItemAt(p, gPointerY);
 	if (row < 0 || !p->items[row].enabled || p->items[row].separator)
 		return;
-	if (p->items[row].submenu) {
+	if (p->items[row].submenu && !(p->items[row].clickActs && p->items[row].action)) {
 		OpenSubmenu(p, row);
 		return;
 	}

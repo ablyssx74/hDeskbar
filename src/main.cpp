@@ -381,13 +381,6 @@ void DrawHeader(cairo_t* cr, double x, double y, double w, double h, double tl, 
 	cairo_fill(cr);
 	cairo_pattern_destroy(fade);
 
-	// a fine light line along the top edge
-	RoundedRectPath(cr, x + 0.5, y + 0.5, w - 1, h - 1, std::max(0.0, tl - 0.5), std::max(0.0, tr - 0.5),
-		std::max(0.0, br - 0.5), std::max(0.0, bl - 0.5));
-	cairo_set_source_rgba(cr, 1, 1, 1, 0.25);
-	cairo_set_line_width(cr, 1);
-	cairo_stroke(cr);
-
 	const int size = h >= kIconSize + 1 ? kIconSize : kIconSize - 2;
 	DrawSnakeTrackerIcon(cr, x + std::floor((w - size) / 2), y + std::floor((h - size) / 2), size);
 }
