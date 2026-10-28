@@ -82,7 +82,7 @@ const xdg_popup_listener kPopupListener = {
 
 }	// namespace
 
-void ShowTooltip(const std::string& text, int x, int y, int w, int h, bool above)
+void ShowTooltip(const std::string& text, int x, int y, int w, int h, bool above, const std::string& widest)
 {
 	HideTooltip();
 	if (gWl.wmBase == nullptr || gWl.layerSurface == nullptr || text.empty())
@@ -94,7 +94,7 @@ void ShowTooltip(const std::string& text, int x, int y, int w, int h, bool above
 		static cairo_surface_t* scratch = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
 		static cairo_t* cr = cairo_create(scratch);
 		PangoFontDescription* font = nullptr;
-		PangoLayout* layout = MakeLayout(cr, text, &font);
+		PangoLayout* layout = MakeLayout(cr, widest.size() > text.size() ? widest : text, &font);
 		int textWidth = 0, textHeight = 0;
 		pango_layout_get_pixel_size(layout, &textWidth, &textHeight);
 		pango_font_description_free(font);
@@ -138,6 +138,14 @@ void HideTooltip()
 		wl_surface_destroy(gTip->surface);
 	}
 	gTip.reset();
+}
+
+void UpdateTooltipText(const std::string& text)
+{
+	if (!gTip || gTip->text == text || text.empty())
+		return;
+	gTip->text = text;
+	Paint(gTip.get());
 }
 
 bool TooltipShown()

@@ -964,7 +964,7 @@ bool BarIsAtBottom()
 // What is under the pointer that has a tooltip, and what it says.
 struct TipTarget {
 	bool valid = false;
-	std::string key, text;
+	std::string key, text, widest;		// (widest: the longest the text gets, for a tooltip that is kept up to date)
 	Rect rect;
 };
 
@@ -984,11 +984,15 @@ TipTarget TipAt(double x, double y)
 			snprintf(buffer, sizeof(buffer), "Muted");
 		else
 			snprintf(buffer, sizeof(buffer), "Volume: %d%%", static_cast<int>(std::lround(gVolume.level * 100)));
-		return done("volume", buffer, gLayout.volume);
+		TipTarget volume = done("volume", buffer, gLayout.volume);
+		volume.widest = "Volume: 100%";
+		return volume;
 	}
 	if (gSettings.showCpu && gLayout.graph.Contains(x, y)) {
 		snprintf(buffer, sizeof(buffer), "CPU: %d%%", static_cast<int>(std::lround(gApp.cpu.Average() * 100)));
-		return done("cpu", buffer, gLayout.graph);
+		TipTarget cpu = done("cpu", buffer, gLayout.graph);
+		cpu.widest = "CPU: 100%";
+		return cpu;
 	}
 	if (gLayout.clock.Contains(x, y)) {
 		time_t now = time(nullptr);
@@ -1019,6 +1023,17 @@ TipTarget TipAt(double x, double y)
 		}
 	}
 	return t;
+}
+
+// The tooltip of the CPU graph or the volume that is shown says what is true now: called when the load is sampled and when the
+// volume changes.
+void RefreshTooltip()
+{
+	if (!TooltipShown() || (gApp.tipKey != "volume" && gApp.tipKey != "cpu"))
+		return;
+	const TipTarget target = TipAt(gApp.pointerX, gApp.pointerY);
+	if (target.valid && target.key == gApp.tipKey)
+		UpdateTooltipText(target.text);
 }
 
 void CancelTooltip()
@@ -1052,7 +1067,7 @@ void UpdateTooltip()
 		const TipTarget now = TipAt(gApp.pointerX, gApp.pointerY);
 		if (now.valid && now.key == gApp.tipKey) {
 			ShowTooltip(now.text, static_cast<int>(now.rect.x), static_cast<int>(now.rect.y), static_cast<int>(now.rect.w),
-				static_cast<int>(now.rect.h), BarIsAtBottom());
+				static_cast<int>(now.rect.h), BarIsAtBottom(), now.widest);
 		}
 		return G_SOURCE_REMOVE;
 	}, nullptr);
@@ -1542,7 +1557,10 @@ void SettingsChanged()
 	}
 	if (gSettings.showVolume && !gVolumeStarted) {
 		gVolumeStarted = true;
-		gVolume.onChanged = []() { Redraw(); };
+		gVolume.onChanged = []() {
+			Redraw();
+			RefreshTooltip();
+		};
 		gVolume.Init();
 	}
 	Redraw();
@@ -1644,7 +1662,10 @@ int main(int argc, char** argv)
 	}
 	if (gSettings.showVolume) {
 		gVolumeStarted = true;
-		gVolume.onChanged = []() { Redraw(); };
+		gVolume.onChanged = []() {
+			Redraw();
+			RefreshTooltip();
+		};
 		gVolume.Init();
 	}
 	StartUpdateChecker();
@@ -1657,6 +1678,7 @@ int main(int argc, char** argv)
 		if (gSettings.showCpu) {
 			gApp.cpu.Sample();
 			Redraw();
+			RefreshTooltip();
 		} else if (stamp != shownTime)
 			Redraw();
 		shownTime = stamp;
