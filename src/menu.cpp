@@ -48,6 +48,7 @@ struct Popup {
 	int childSide = 0;			// where the open submenu is: 1 to the right of this menu, -1 to the left
 	bool barAbove = false;		// the bar this menu starts from is below it: the trail starts at the bottom
 	int trailSide = 0;			// the edge of this menu that faces its parent: -1 the left one, 1 the right one
+	int headerSpan = 0;			// the height of the header this menu starts from (its trail takes the header's gradient there)
 	double trailRowY = 0;		// where the parent's row is, in this menu's pixels (the trail's bar starts there)
 	bool mirror = false;			// opens to the left, chevrons on the left
 	int lead = 0;				// the room of those chevrons
@@ -360,7 +361,29 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 				continue;
 			}
 			float r = static_cast<float>(kAccent.r * 255), g = static_cast<float>(kAccent.g * 255), b = static_cast<float>(kAccent.b * 255);
-			const float rs = shade[k];
+			float rs = shade[k];
+			if (fromBar && p->headerSpan > 8) {
+				// Where the trail runs along the header it has the header's own gradient (light at its top, dark at its bottom), so the
+				// two meet without a seam; a little beyond the header it goes back to the shading of the trail.
+				const float lx = (bx0 + xx + 0.5f) / S, ly = (by0 + yy + 0.5f) / S;
+				const bool inColumn = parentOnLeft ? lx < kBarW + 1 : lx > w - kBarW - 1;
+				const float span = static_cast<float>(p->headerSpan);
+				const float headerTop = p->barAbove ? h - span : 0.0f;
+				const float t = (ly - headerTop) / span;
+				const float beyond = t < 0 ? -t * span : (t > 1 ? (t - 1) * span : 0.0f);
+				const float m = inColumn ? std::max(0.0f, 1.0f - beyond / 12.0f) : 0.0f;
+				if (m > 0.0f) {
+					const float u = std::clamp(t, 0.0f, 1.0f);
+					const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
+					const Color from = u < 0.5f ? light : kAccent, to = u < 0.5f ? kAccent : dark;
+					const double f = u < 0.5f ? u / 0.5f : (u - 0.5f) / 0.5f;
+					const Color c = Mix(from, to, f);
+					r += (static_cast<float>(c.r * 255) - r) * m;
+					g += (static_cast<float>(c.g * 255) - g) * m;
+					b += (static_cast<float>(c.b * 255) - b) * m;
+					rs *= 1.0f - 0.7f * m;
+				}
+			}
 			if (rs > 0.0f) {
 				r += (255.0f - r) * rs;
 				g += (255.0f - g) * rs;
@@ -764,6 +787,7 @@ void OpenMenu(std::vector<MenuItem> items, const MenuAnchor& anchor)
 		const bool left = anchor.side < 0;
 		raw->trailSide = -anchor.side;
 		raw->barAbove = anchor.above;		// (a bar at the bottom of the screen: the menu goes up from its header, and the trail starts at the bottom)
+		raw->headerSpan = anchor.h;
 		// (the menu is level with the header's top, or with its bottom when the bar is at the bottom of the screen)
 		const uint32_t anchorEdge = anchor.above ? (left ? XDG_POSITIONER_ANCHOR_BOTTOM_LEFT : XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT)
 			: (left ? XDG_POSITIONER_ANCHOR_TOP_LEFT : XDG_POSITIONER_ANCHOR_TOP_RIGHT);
