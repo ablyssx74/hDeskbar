@@ -266,6 +266,7 @@ std::vector<MenuItem> RecentFileItems(bool folders)
 
 struct UnmountedVolume {
 	std::string device, label;
+	std::string mountPoint;			// (the volumes that are mounted have one)
 };
 
 // the value of KEY="..." in a line of `lsblk -P` (lsblk writes odd characters as \xHH)
@@ -289,32 +290,79 @@ static std::string PairValue(const std::string& line, const char* key)
 	return value;
 }
 
-static std::vector<UnmountedVolume> UnmountedVolumes()
+static std::string Trimmed(std::string text)
+{
+	while (!text.empty() && isspace(static_cast<unsigned char>(text.back())))
+		text.pop_back();
+	size_t start = 0;
+	while (start < text.size() && isspace(static_cast<unsigned char>(text[start])))
+		start++;
+	return text.substr(start);
+}
+
+// The volumes the system has, mounted or not, with a name a person can read: the label the volume was given, else the name its
+// partition was given, else the disk it is on (its make and size) and not the serial number the file system has.
+// lsblk lists a disk before its partitions, so the model of a disk is known when its partitions come.
+static std::vector<UnmountedVolume> SystemVolumes(bool mounted)
 {
 	std::vector<UnmountedVolume> volumes;
-	FILE* pipe = popen("lsblk -P -o PATH,LABEL,FSTYPE,MOUNTPOINT,SIZE,TYPE 2>/dev/null", "r");
+	FILE* pipe = popen("lsblk -P -o PATH,LABEL,PARTLABEL,FSTYPE,MOUNTPOINT,SIZE,TYPE,MODEL,PKNAME 2>/dev/null", "r");
 	if (pipe == nullptr)
 		return volumes;
+	std::map<std::string, std::string> models;		// disk name -> its model
 	char buffer[2048];
 	while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
 		const std::string line = buffer;
 		const std::string type = PairValue(line, "TYPE"), fs = PairValue(line, "FSTYPE");
-		if (fs.empty() || !PairValue(line, "MOUNTPOINT").empty())
+		const std::string path = PairValue(line, "PATH");
+		const std::string base = path.substr(path.rfind('/') + 1);
+		if (type == "disk") {
+			models[base] = Trimmed(PairValue(line, "MODEL"));
+			if (fs.empty())
+				continue;
+		}
+		const std::string mountPoint = PairValue(line, "MOUNTPOINT");
+		if (fs.empty() || (mountPoint.empty() == mounted))
 			continue;
 		if (type.rfind("loop", 0) == 0 || fs == "swap" || fs == "LVM2_member" || fs == "crypto_LUKS" || fs == "linux_raid_member"
 			|| fs == "zfs_member" || fs == "squashfs")
 			continue;
 		UnmountedVolume volume;
-		volume.device = PairValue(line, "PATH");
-		std::string name = PairValue(line, "LABEL");
-		if (name.empty())
-			name = volume.device.substr(volume.device.rfind('/') + 1);
+		volume.device = path;
+		volume.mountPoint = mountPoint;
+		std::string name = Trimmed(PairValue(line, "LABEL"));
+		if (name.empty()) {
+			// (the names the partition tools give a partition they know nothing about say nothing)
+			const std::string part = Trimmed(PairValue(line, "PARTLABEL"));
+			static const char* const generic[] = { "NTFS Volume", "Basic data partition", "Microsoft basic data",
+				"Microsoft reserved partition", "EFI System Partition", "EFI system partition", "Linux filesystem" };
+			bool plain = false;
+			for (const char* g : generic)
+				plain = plain || part == g;
+			if (!plain)
+				name = part;
+		}
 		const std::string size = PairValue(line, "SIZE");
-		volume.label = size.empty() ? name : name + " (" + size + ")";
+		bool named = true;
+		if (name.empty() && mountPoint == "/")
+			name = "System";
+		if (name.empty()) {
+			const std::string parent = PairValue(line, "PKNAME");
+			const std::string model = models.count(parent) ? models[parent] : (models.count(base) ? models[base] : "");
+			name = !model.empty() ? model : (type == "part" ? "Partition" : "Volume");
+			named = false;
+		}
+		// (a name that says nothing of the size gets it, so two volumes of one disk can be told apart; so does any that is not mounted)
+		volume.label = (!size.empty() && (!named || !mounted)) ? name + " (" + size + ")" : name;
 		volumes.push_back(volume);
 	}
 	pclose(pipe);
 	return volumes;
+}
+
+static std::vector<UnmountedVolume> UnmountedVolumes()
+{
+	return SystemVolumes(false);
 }
 
 static std::string MakeFileUri(const std::string& path)
@@ -363,6 +411,9 @@ std::vector<MenuItem> MountItems()
 	std::vector<MenuItem> items;
 	GVolumeMonitor* monitor = g_volume_monitor_get();
 	std::set<std::string> shownMounts;
+	std::map<std::string, std::string> friendly;		// mount point -> the name of the volume
+	for (const UnmountedVolume& volume : SystemVolumes(true))
+		friendly[volume.mountPoint] = volume.label;
 	GList* mounts = g_volume_monitor_get_mounts(monitor);
 	for (GList* l = mounts; l != nullptr; l = l->next) {
 		GMount* mount = G_MOUNT(l->data);
@@ -371,8 +422,16 @@ std::vector<MenuItem> MountItems()
 		GFile* root = g_mount_get_root(mount);
 		char* uri = g_file_get_uri(root);
 		char* name = g_mount_get_name(mount);
+		char* rootPath = g_file_get_path(root);
 		MenuItem item;
 		item.label = name;
+		// (the monitor names a volume without a label by its serial number: name it by the disk it is on)
+		if (rootPath != nullptr) {
+			auto found = friendly.find(rootPath);
+			if (found != friendly.end())
+				item.label = found->second;
+		}
+		g_free(rootPath);
 		item.iconName = "drive-harddisk";
 		const std::string target = uri;
 		item.action = [target]() { OpenUri(target); };

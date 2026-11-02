@@ -280,7 +280,7 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 	const double tlR = (overParent && parentOnLeft && !(fromBar && p->barAbove)) ? 0.0 : kMenuRadius, trR = (overParent && !parentOnLeft && !(fromBar && p->barAbove)) ? 0.0 : kMenuRadius;
 	const double blR = ((squareBottom || (fromBar && p->barAbove)) && parentOnLeft) ? 0.0 : kMenuRadius, brR = ((squareBottom || (fromBar && p->barAbove)) && !parentOnLeft) ? 0.0 : kMenuRadius;
 	RoundedRectPath(cr, 0, 0, w, h, tlR, trR, brR, blR);
-	cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
+	cairo_set_source_rgba(cr, kPanel.r, kPanel.g, kPanel.b, kPanelAlpha);
 	cairo_fill(cr);
 	if (pieces.empty() && fillets.empty())
 		return;
@@ -354,7 +354,7 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 		uint32_t* row = reinterpret_cast<uint32_t*>(bits + yy * stride);
 		for (int xx = 0; xx < BW; xx++) {
 			const size_t k = static_cast<size_t>(yy) * BW + xx;
-			const float a = lit[k];
+			const float a = lit[k] * static_cast<float>(kAccentAlpha);
 			if (a <= 0.0f) {
 				row[xx] = 0;
 				continue;

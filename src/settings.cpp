@@ -8,6 +8,7 @@
 #include <glib.h>
 #include <glib/gstdio.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -79,17 +80,43 @@ void LoadSettings()
 			ParsePlacement(place, &gSettings.placement);
 			g_free(place);
 		}
-		char* accent = g_key_file_get_string(file, "hdeskbar", "accent", nullptr);
-		if (accent != nullptr) {
+		auto color = [&](const char* key, Color* out) {
+			char* text = g_key_file_get_string(file, "hdeskbar", key, nullptr);
 			unsigned value = 0;
-			if (sscanf(accent, "#%x", &value) == 1) {
-				gSettings.accent = { ((value >> 16) & 0xff) / 255.0, ((value >> 8) & 0xff) / 255.0, (value & 0xff) / 255.0 };
-			}
-			g_free(accent);
+			if (text != nullptr && sscanf(text, "#%x", &value) == 1)
+				*out = { ((value >> 16) & 0xff) / 255.0, ((value >> 8) & 0xff) / 255.0, (value & 0xff) / 255.0 };
+			g_free(text);
+		};
+		auto number = [&](const char* key, double* out) {
+			GError* error = nullptr;
+			const double read = g_key_file_get_double(file, "hdeskbar", key, &error);
+			if (error == nullptr)
+				*out = std::clamp(read, 0.2, 1.0);
+			g_clear_error(&error);
+		};
+		color("accent", &gSettings.accent);
+		color("panel", &gSettings.panel);
+		flag("own_panel", &gSettings.ownPanel);
+		number("accent_opacity", &gSettings.accentOpacity);
+		number("panel_opacity", &gSettings.panelOpacity);
+		char* icon = g_key_file_get_string(file, "hdeskbar", "header_icon", nullptr);
+		if (icon != nullptr) {
+			gSettings.headerIcon = icon;
+			g_free(icon);
 		}
+		GError* error = nullptr;
+		const int size = g_key_file_get_integer(file, "hdeskbar", "header_size", &error);
+		if (error == nullptr && size >= 16 && size <= 64)
+			gSettings.headerSize = size;
+		g_clear_error(&error);
 	}
 	g_key_file_free(file);
-	SetAccent(gSettings.accent);
+	ApplyColors();
+}
+
+void ApplyColors()
+{
+	SetColors(gSettings.accent, gSettings.ownPanel, gSettings.panel, gSettings.accentOpacity, gSettings.panelOpacity);
 }
 
 void SaveSettings()
@@ -107,10 +134,19 @@ void SaveSettings()
 	g_key_file_set_boolean(file, "hdeskbar", "expand_tabs", gSettings.expandTabs);
 	g_key_file_set_boolean(file, "hdeskbar", "check_for_updates", gSettings.checkForUpdates);
 	g_key_file_set_string(file, "hdeskbar", "placement", PlacementName(gSettings.placement));
-	char accent[16];
-	snprintf(accent, sizeof(accent), "#%02x%02x%02x", static_cast<int>(gSettings.accent.r * 255 + 0.5),
-		static_cast<int>(gSettings.accent.g * 255 + 0.5), static_cast<int>(gSettings.accent.b * 255 + 0.5));
-	g_key_file_set_string(file, "hdeskbar", "accent", accent);
+	auto hex = [](const Color& c) {
+		char text[16];
+		snprintf(text, sizeof(text), "#%02x%02x%02x", static_cast<int>(c.r * 255 + 0.5), static_cast<int>(c.g * 255 + 0.5),
+			static_cast<int>(c.b * 255 + 0.5));
+		return std::string(text);
+	};
+	g_key_file_set_string(file, "hdeskbar", "accent", hex(gSettings.accent).c_str());
+	g_key_file_set_string(file, "hdeskbar", "panel", hex(gSettings.panel).c_str());
+	g_key_file_set_boolean(file, "hdeskbar", "own_panel", gSettings.ownPanel);
+	g_key_file_set_double(file, "hdeskbar", "accent_opacity", gSettings.accentOpacity);
+	g_key_file_set_double(file, "hdeskbar", "panel_opacity", gSettings.panelOpacity);
+	g_key_file_set_string(file, "hdeskbar", "header_icon", gSettings.headerIcon.c_str());
+	g_key_file_set_integer(file, "hdeskbar", "header_size", gSettings.headerSize);
 	const std::string path = ConfigPath();
 	g_mkdir_with_parents((std::string(g_get_user_config_dir()) + "/hdeskbar").c_str(), 0755);
 	g_key_file_save_to_file(file, path.c_str(), nullptr);

@@ -29,7 +29,13 @@ struct Settings {
 	bool checkForUpdates = true;	// read the VERSION file of the repository a few seconds after the start
 	bool expandTabs = true;		// a vertical bar shows the windows of a program under its tab (off: the tab opens a list)
 	bool clock24 = false;		// 13:49 instead of 1:49 PM
-	Color accent = { 70 / 255.0, 110 / 255.0, 200 / 255.0 };
+	Color accent = { 70 / 255.0, 110 / 255.0, 200 / 255.0 };		// the SnakeTracker color, the highlight
+	bool ownPanel = false;					// off: the panel is a light tint of the accent
+	Color panel = { 200 / 255.0, 203 / 255.0, 235 / 255.0 };	// the background of the bar and the menus
+	double accentOpacity = 1.0;				// 0.2 to 1
+	double panelOpacity = 1.0;
+	std::string headerIcon;					// a picture's file or an icon's name for the header (empty: the SnakeTracker snake)
+	int headerSize = 24;					// the header's height, and its icon's size
 };
 
 extern Settings gSettings;
@@ -41,6 +47,9 @@ const char* PlacementName(Placement placement);
 
 void LoadSettings();
 void SaveSettings();
+
+// What a change of the colors does: the colors of the drawing follow the settings.
+void ApplyColors();
 
 // Called when the window has changed something (the place, a part shown or left out, the color): the bar follows.
 extern std::function<void()> gOnSettingsChanged;

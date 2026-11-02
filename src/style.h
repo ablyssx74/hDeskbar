@@ -24,12 +24,18 @@ inline Color Mix(const Color& a, const Color& b, double t)
 	return { a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t };
 }
 
-// The panel is the accent color in a light tint (for the default blue, the lavender of the Haiku Deskbar).
-inline void SetAccent(const Color& accent)
+inline double kAccentAlpha = 1.0;		// how much of the SnakeTracker color shows (the rest lets the screen through)
+inline double kPanelAlpha = 1.0;		// the same for the panel
+
+// The panel is the accent color in a light tint (for the default blue, the lavender of the Haiku Deskbar), unless a color of its
+// own was chosen for it.
+inline void SetColors(const Color& accent, bool ownPanel, const Color& panel, double accentOpacity, double panelOpacity)
 {
 	kAccent = accent;
 	const Color tint = {1.0, 0.953, 0.98};
-	kPanel = Mix(accent, tint, 0.7);
+	kPanel = ownPanel ? panel : Mix(accent, tint, 0.7);
+	kAccentAlpha = accentOpacity;
+	kPanelAlpha = panelOpacity;
 }
 
 // A rectangle with a radius for each of its corners (0 for a square one).

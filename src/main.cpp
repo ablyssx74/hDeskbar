@@ -62,10 +62,13 @@ AppDatabase* gApps = nullptr;
 namespace {
 
 constexpr double kRadius = 7;
-constexpr int kHeaderHeight = 24;		// the block with the icon (a vertical bar)
+// The header is as high as its icon (24 by default, the choice of the settings); in a horizontal bar it is 24 wider than that, and the
+// bar is as high as the header with a pixel round it (26 at least).
+int HeaderHeight() { return gSettings.headerSize; }
+int HeaderWidth() { return gSettings.headerSize + 24; }
+int HeaderIconSize() { return gSettings.headerSize; }
+int HorizontalHeight() { return std::max(26, gSettings.headerSize + 2); }
 constexpr int kRowHeight = 24;			// the row of the clock, and later the CPU graph and the tray
-constexpr int kHeaderWidth = 48;		// the same block in a horizontal bar
-constexpr int kIconSize = 24;			// the icon in the header of a vertical bar (a horizontal bar's is a little smaller)
 constexpr int kGraphWidth = 56;
 constexpr int kRefreshMs = 500;		// how often the CPU graph moves
 
@@ -95,7 +98,7 @@ struct App {
 	bool redrawQueued = false;
 	double pointerX = -1, pointerY = -1;
 
-	int width = 150, height = 2 + kHeaderHeight + kRowHeight;		// what the bar asks for (a horizontal bar's width is the screen's)
+	int width = 150, height = 2 + HeaderHeight() + kRowHeight;		// what the bar asks for (a horizontal bar's width is the screen's)
 	bool configured = false;
 	// where the bar is out of the way: behind the windows, or shrunk to a line at the edge of the screen
 	bool revealed = true, hidden = false, onBar = false, onTrigger = false;
@@ -221,7 +224,6 @@ constexpr int kCell = 22;				// a tray icon's cell
 constexpr int kTrayIcon = 16;
 constexpr int kTabHeight = 24;			// a program's tab
 constexpr int kWindowRow = 20;			// a window, under its program's tab
-constexpr int kHorizontalHeight = 26;
 constexpr int kVerticalWidth = 150;
 
 // The width of a line of text in the bar's font.
@@ -251,7 +253,7 @@ Layout MakeLayout(int width, int height)
 		// The bar runs flush into the edges of the screen it hangs on, with no outline there: the header reaches the edge of
 		// the screen, and so do the tabs. At the bottom of the screen the header, the clock and the tray come last, so the
 		// block that is nearest the edge is the header in either place, and the tabs run away from it.
-		const double headerH = kHeaderHeight + 1.0, edgeX = flushRight ? 1.0 : 0.0, edgeW = width - 1.0;
+		const double headerH = HeaderHeight() + 1.0, edgeX = flushRight ? 1.0 : 0.0, edgeW = width - 1.0;
 		const double tabX = flushRight ? 3 : 0, tabW = width - 3.0;
 		const int columns = std::max(1, (width - 10) / kCell);
 		const int count = static_cast<int>(items.size()) + (gSettings.showVolume ? 1 : 0);
@@ -317,19 +319,19 @@ Layout MakeLayout(int width, int height)
 			}
 		}
 	} else {
-		layout.height = kHorizontalHeight;
+		layout.height = HorizontalHeight();
 		layout.width = width;
-		layout.header = { 1, 1, kHeaderWidth, kHorizontalHeight - 2.0 };
-		layout.clock = { width - 111.0, 1, 110, kHorizontalHeight - 2.0 };
-		layout.graph = { layout.clock.x - kGraphWidth - 6, 4, kGraphWidth, kHorizontalHeight - 8.0 };
+		layout.header = { 1, 1, static_cast<double>(HeaderWidth()), HorizontalHeight() - 2.0 };
+		layout.clock = { width - 111.0, 1, 110, HorizontalHeight() - 2.0 };
+		layout.graph = { layout.clock.x - kGraphWidth - 6, 4, kGraphWidth, HorizontalHeight() - 8.0 };
 		// (the first icon is the leftmost, the last the one next to the graph)
 		for (size_t i = 0; i < items.size(); i++) {
 			layout.cells.push_back({ items[i], { layout.graph.x - 6.0 - (items.size() - i) * kCell,
-				(kHorizontalHeight - kCell) / 2.0, kCell, kCell } });
+				(HorizontalHeight() - kCell) / 2.0, kCell, kCell } });
 		}
 		double right = layout.cells.empty() ? layout.graph.x : layout.cells[0].cell.x;
 		if (gSettings.showVolume) {
-			layout.volume = { right - 6.0 - kCell, (kHorizontalHeight - kCell) / 2.0, kCell, kCell };
+			layout.volume = { right - 6.0 - kCell, (HorizontalHeight() - kCell) / 2.0, kCell, kCell };
 			right = layout.volume.x;
 		}
 		// the tabs, side by side after the header, as far as there is room
@@ -339,7 +341,7 @@ Layout MakeLayout(int width, int height)
 			const double w = std::clamp(TextWidth(layout.teams[t].name) + 54, 70.0, 180.0);
 			if (x + w > right - 8)
 				break;
-			layout.tabs.push_back({ { x, 2, w, kHorizontalHeight - 4.0 }, { x + w - 18, 2, 14, kHorizontalHeight - 4.0 }, t });
+			layout.tabs.push_back({ { x, 2, w, HorizontalHeight() - 4.0 }, { x + w - 18, 2, 14, HorizontalHeight() - 4.0 }, t });
 			x += w + 4;
 		}
 	}
@@ -363,9 +365,9 @@ void DrawHeader(cairo_t* cr, double x, double y, double w, double h, double tl, 
 	// raised like the tabs and the trail of the menus, in the SnakeTracker color
 	cairo_pattern_t* gradient = cairo_pattern_create_linear(0, y, 0, y + h);
 	const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
-	cairo_pattern_add_color_stop_rgb(gradient, 0, light.r, light.g, light.b);
-	cairo_pattern_add_color_stop_rgb(gradient, 0.5, kAccent.r, kAccent.g, kAccent.b);
-	cairo_pattern_add_color_stop_rgb(gradient, 1, dark.r, dark.g, dark.b);
+	cairo_pattern_add_color_stop_rgba(gradient, 0, light.r, light.g, light.b, kAccentAlpha);
+	cairo_pattern_add_color_stop_rgba(gradient, 0.5, kAccent.r, kAccent.g, kAccent.b, kAccentAlpha);
+	cairo_pattern_add_color_stop_rgba(gradient, 1, dark.r, dark.g, dark.b, kAccentAlpha);
 	RoundedRectPath(cr, x, y, w, h, tl, tr, br, bl);
 	cairo_set_source(cr, gradient);
 	cairo_fill(cr);
@@ -375,14 +377,26 @@ void DrawHeader(cairo_t* cr, double x, double y, double w, double h, double tl, 
 	const bool towardLeft = flush < 0;
 	cairo_pattern_t* fade = cairo_pattern_create_linear(towardLeft ? x + w * 0.7 : x + w * 0.3, 0, towardLeft ? x : x + w, 0);
 	cairo_pattern_add_color_stop_rgba(fade, 0, kPanel.r, kPanel.g, kPanel.b, 0);
-	cairo_pattern_add_color_stop_rgba(fade, 1, kPanel.r, kPanel.g, kPanel.b, 0.6);
+	cairo_pattern_add_color_stop_rgba(fade, 1, kPanel.r, kPanel.g, kPanel.b, 0.6 * kPanelAlpha);
 	RoundedRectPath(cr, x, y, w, h, tl, tr, br, bl);
 	cairo_set_source(cr, fade);
 	cairo_fill(cr);
 	cairo_pattern_destroy(fade);
 
-	const int size = h >= kIconSize + 1 ? kIconSize : kIconSize - 2;
-	DrawSnakeTrackerIcon(cr, x + std::floor((w - size) / 2), y + std::floor((h - size) / 2), size);
+	const int size = h >= HeaderIconSize() + 1 ? HeaderIconSize() : HeaderIconSize() - 2;
+	const double ix = x + std::floor((w - size) / 2), iy = y + std::floor((h - size) / 2);
+	IconRef chosen = gSettings.headerIcon.empty() ? nullptr : CachedIcon(gSettings.headerIcon, size);
+	if (chosen) {
+		const double iw = cairo_image_surface_get_width(chosen.get()), ih = cairo_image_surface_get_height(chosen.get());
+		cairo_save(cr);
+		cairo_translate(cr, ix, iy);
+		cairo_scale(cr, size / iw, size / ih);
+		cairo_set_source_surface(cr, chosen.get(), 0, 0);
+		cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BEST);
+		cairo_paint(cr);
+		cairo_restore(cr);
+	} else
+		DrawSnakeTrackerIcon(cr, ix, iy, size);
 }
 
 // The CPU graph, in the place of ProcessController: a dark box with one bar for each processor.
@@ -439,7 +453,7 @@ void DrawVolume(cairo_t* cr, const Rect& r)
 	const double level = gVolume.level;
 	if (r.Contains(gApp.pointerX, gApp.pointerY)) {
 		RoundedRectPath(cr, r.x, r.y, r.w, r.h, 4, 4, 4, 4);
-		cairo_set_source_rgba(cr, kAccent.r, kAccent.g, kAccent.b, 0.30);
+		cairo_set_source_rgba(cr, kAccent.r, kAccent.g, kAccent.b, 0.30 * kAccentAlpha);
 		cairo_fill(cr);
 	}
 	const char* name = muted ? "audio-volume-muted" : (level < 0.34 ? "audio-volume-low"
@@ -557,9 +571,9 @@ void DrawTab(cairo_t* cr, const TabRect& tr, const Team& team, bool vertical, bo
 
 	cairo_pattern_t* raised = cairo_pattern_create_linear(0, r.y, 0, r.y + r.h);
 	const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
-	cairo_pattern_add_color_stop_rgb(raised, 0, light.r, light.g, light.b);
-	cairo_pattern_add_color_stop_rgb(raised, 0.5, kAccent.r, kAccent.g, kAccent.b);
-	cairo_pattern_add_color_stop_rgb(raised, 1, dark.r, dark.g, dark.b);
+	cairo_pattern_add_color_stop_rgba(raised, 0, light.r, light.g, light.b, kAccentAlpha);
+	cairo_pattern_add_color_stop_rgba(raised, 0.5, kAccent.r, kAccent.g, kAccent.b, kAccentAlpha);
+	cairo_pattern_add_color_stop_rgba(raised, 1, dark.r, dark.g, dark.b, kAccentAlpha);
 	BarShape(cr, r, flush);
 	cairo_set_source(cr, raised);
 	cairo_fill(cr);
@@ -570,7 +584,7 @@ void DrawTab(cairo_t* cr, const TabRect& tr, const Team& team, bool vertical, bo
 	cairo_pattern_t* fade = cairo_pattern_create_linear(towardLeft ? r.x + r.w * 0.7 : r.x + r.w * 0.3, 0,
 		towardLeft ? r.x : r.x + r.w, 0);
 	cairo_pattern_add_color_stop_rgba(fade, 0, kPanel.r, kPanel.g, kPanel.b, 0);
-	cairo_pattern_add_color_stop_rgba(fade, 1, kPanel.r, kPanel.g, kPanel.b, 0.6);
+	cairo_pattern_add_color_stop_rgba(fade, 1, kPanel.r, kPanel.g, kPanel.b, 0.6 * kPanelAlpha);
 	BarShape(cr, r, flush);
 	cairo_set_source(cr, fade);
 	cairo_fill(cr);
@@ -638,7 +652,7 @@ void DrawBox(cairo_t* cr, const Layout& layout, const BoxRect& br)
 		double x = r.x, w = r.w;
 		if (flush < 0) { x -= 2 * radius; w += 2 * radius; } else w += 2 * radius;
 		RoundedRectPath(cr, x, r.y, w, r.h, radius, radius, radius, radius);
-		cairo_set_source_rgb(cr, box.r, box.g, box.b);
+		cairo_set_source_rgba(cr, box.r, box.g, box.b, kAccentAlpha);
 		cairo_fill(cr);
 	}
 	cairo_restore(cr);
@@ -654,7 +668,7 @@ void DrawBox(cairo_t* cr, const Layout& layout, const BoxRect& br)
 			cairo_rectangle(cr, row.row.x, row.row.y, row.row.w, row.row.h);
 			cairo_clip(cr);
 			BarShape(cr, { row.row.x + (flush > 0 ? 4 : 0), row.row.y + 1, row.row.w - 4, row.row.h - 2 }, flush);
-			cairo_set_source_rgba(cr, kAccent.r, kAccent.g, kAccent.b, window->activated ? 0.95 : 0.50);
+			cairo_set_source_rgba(cr, kAccent.r, kAccent.g, kAccent.b, (window->activated ? 0.95 : 0.50) * kAccentAlpha);
 			cairo_fill(cr);
 			cairo_restore(cr);
 		}
@@ -676,7 +690,7 @@ void DrawTray(cairo_t* cr, const Layout& layout)
 		item->size = cell.cell.w;
 		if (cell.cell.Contains(gApp.pointerX, gApp.pointerY)) {
 			RoundedRectPath(cr, cell.cell.x, cell.cell.y, cell.cell.w, cell.cell.h, 4, 4, 4, 4);
-			cairo_set_source_rgba(cr, kAccent.r, kAccent.g, kAccent.b, 0.30);
+			cairo_set_source_rgba(cr, kAccent.r, kAccent.g, kAccent.b, 0.30 * kAccentAlpha);
 			cairo_fill(cr);
 		}
 		const bool attention = item->status == "NeedsAttention";
@@ -723,7 +737,7 @@ void Draw(cairo_t* cr, const Layout& layout)
 
 	// the panel, and the outline over its edge (half a pixel in, so the line is one pixel wide)
 	RoundedRectPath(cr, 0, 0, width, height, tl, tr, br, bl);
-	cairo_set_source_rgb(cr, kPanel.r, kPanel.g, kPanel.b);
+	cairo_set_source_rgba(cr, kPanel.r, kPanel.g, kPanel.b, kPanelAlpha);
 	cairo_fill_preserve(cr);
 	cairo_new_path(cr);
 	cairo_save(cr);
@@ -1435,12 +1449,12 @@ void ApplyVisibility()
 		gApp.width = hidden ? kStrip : kVerticalWidth;
 		zwlr_layer_surface_v1_set_size(gApp.layerSurface, gApp.width, gApp.height);
 	} else {
-		gApp.height = hidden ? kStrip : kHorizontalHeight;
+		gApp.height = hidden ? kStrip : HorizontalHeight();
 		zwlr_layer_surface_v1_set_size(gApp.layerSurface, 0, gApp.height);
 	}
 	// (a horizontal bar keeps windows clear of itself, if it stays where it is; a vertical one is not a full edge, so it reserves nothing yet)
 	const bool keepsClear = !vertical && gSettings.alwaysOnTop && !gSettings.autoHide;
-	zwlr_layer_surface_v1_set_exclusive_zone(gApp.layerSurface, keepsClear ? kHorizontalHeight : 0);
+	zwlr_layer_surface_v1_set_exclusive_zone(gApp.layerSurface, keepsClear ? HorizontalHeight() : 0);
 	wl_surface_commit(gApp.surface);
 }
 
@@ -1526,9 +1540,9 @@ void ApplyPlacement()
 	const bool vertical = IsVertical(gSettings.placement);
 	if (vertical) {
 		gApp.width = kVerticalWidth;
-		gApp.height = 2 + kHeaderHeight + kRowHeight;
+		gApp.height = 2 + HeaderHeight() + kRowHeight;
 	} else
-		gApp.height = kHorizontalHeight;
+		gApp.height = HorizontalHeight();
 	gApp.shownPlacement = gSettings.placement;
 	gApp.anchor = anchor;
 	zwlr_layer_surface_v1_set_anchor(gApp.layerSurface, anchor);
