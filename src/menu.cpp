@@ -371,7 +371,11 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 				const float headerTop = p->barAbove ? h - span : 0.0f;
 				const float t = (ly - headerTop) / span;
 				const float beyond = t < 0 ? -t * span : (t > 1 ? (t - 1) * span : 0.0f);
-				const float m = inColumn ? std::max(0.0f, 1.0f - beyond / 12.0f) : 0.0f;
+				// (the rows that lie within the header's height are part of the same lit shape, so they take the gradient too, and
+				// keep more of their own shading than the column does)
+				const float colorM = std::max(0.0f, 1.0f - beyond / 12.0f);
+				const float m = colorM;
+				const float shadeKeep = inColumn ? 0.7f : 0.35f;
 				if (m > 0.0f) {
 					const float u = std::clamp(t, 0.0f, 1.0f);
 					const Color light = Mix(kAccent, {1, 1, 1}, 0.24), dark = Mix(kAccent, {0, 0, 0}, 0.14);
@@ -381,7 +385,7 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 					r += (static_cast<float>(c.r * 255) - r) * m;
 					g += (static_cast<float>(c.g * 255) - g) * m;
 					b += (static_cast<float>(c.b * 255) - b) * m;
-					rs *= 1.0f - 0.7f * m;
+					rs *= 1.0f - shadeKeep * m;
 				}
 			}
 			if (rs > 0.0f) {

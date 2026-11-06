@@ -33,7 +33,7 @@ namespace {
 constexpr int kWidth = 380, kHeight = 340;
 
 enum Kind { kCheckTabs, kCheckTray, kCheckCpu, kCheckVolume, kCheck24, kCheckSeconds, kCheckTop, kCheckRaise, kCheckHide,
-	kCheckUpdates, kCheckExpand, kCheckOwnPanel, kPlace, kColor, kPanelColor, kAccentOpacity, kPanelOpacity, kChooseIcon,
+	kCheckUpdates, kCheckExpand, kCheckOwnPanel, kPlace, kColor, kPanelColor, kAccentOpacity, kPanelOpacity, kBarWidth, kChooseIcon,
 	kDefaultIcon, kSize, kTab, kClose };
 
 struct Hit {
@@ -46,7 +46,9 @@ struct Hit {
 
 const char* const kTabNames[] = { "Show", "Behavior", "Look", "Header" };
 constexpr int kTabCount = 4;
-const int kSizes[] = { 16, 24, 32, 48, 64 };
+const int kSizes[] = { 24, 32, 48, 64, 96, 128 };
+constexpr int kSizeCount = 6;
+constexpr int kMinBarWidth = 100, kMaxBarWidth = 400;
 
 struct Window {
 	wl_surface* surface = nullptr;
@@ -105,8 +107,9 @@ void MakeHits(Window* w)
 		case 3:
 			w->hits.push_back({ left + 64, 62, 130, 26, kChooseIcon, 0 });
 			w->hits.push_back({ left + 204, 62, 100, 26, kDefaultIcon, 0 });
-			for (int i = 0; i < 5; i++)
-				w->hits.push_back({ left + i * 66.0, 146, 60, 22, kSize, i });
+			for (int i = 0; i < kSizeCount; i++)
+				w->hits.push_back({ left + i * 56.0, 146, 54, 22, kSize, i });
+			w->hits.push_back({ kSliderX, 224, kSliderW, 20, kBarWidth, 0 });
 			break;
 	}
 	w->hits.push_back({ kWidth - 24 - 80.0, kHeight - 24 - 26.0, 80, 26, kClose, 0 });
@@ -193,7 +196,8 @@ void DrawSwatch(cairo_t* cr, const Hit& hit, const Color& color, double opacity,
 	cairo_stroke(cr);
 }
 
-void DrawSlider(cairo_t* cr, const Hit& hit, double opacity, const Color& ink)
+// (the slider runs from 0.2 to 1; the label is the percentage unless one is given)
+void DrawSlider(cairo_t* cr, const Hit& hit, double opacity, const Color& ink, const std::string& label = "")
 {
 	const double ty = hit.y + hit.h / 2, t = (opacity - 0.2) / 0.8;
 	cairo_set_line_width(cr, 4);
@@ -215,7 +219,7 @@ void DrawSlider(cairo_t* cr, const Hit& hit, double opacity, const Color& ink)
 	cairo_stroke(cr);
 	char percent[16];
 	snprintf(percent, sizeof(percent), "%d%%", static_cast<int>(opacity * 100 + 0.5));
-	Text(cr, percent, hit.x + hit.w + 12, ty, false, ink);
+	Text(cr, label.empty() ? std::string(percent) : label, hit.x + hit.w + 12, ty, false, ink);
 }
 
 void Paint(Window* w)
@@ -237,6 +241,7 @@ void Paint(Window* w)
 		} else if (w->tab == 3) {
 			Text(cr, "Icon", 16, 48, true, ink);
 			Text(cr, "Size of the header and its icon", 16, 128, true, ink);
+			Text(cr, "Width of a vertical bar", 16, 200, true, ink);
 		}
 
 		for (size_t i = 0; i < w->hits.size(); i++) {
@@ -334,6 +339,10 @@ void Paint(Window* w)
 				case kAccentOpacity:
 				case kPanelOpacity:
 					DrawSlider(cr, hit, *OpacityOf(hit.kind), ink);
+					break;
+				case kBarWidth:
+					DrawSlider(cr, hit, (gSettings.barWidth - kMinBarWidth) * 0.8 / (kMaxBarWidth - kMinBarWidth) + 0.2, ink,
+						std::to_string(gSettings.barWidth));
 					break;
 				case kChooseIcon:
 				case kDefaultIcon:
@@ -494,7 +503,10 @@ void MoveSlider(const Hit& hit, double x)
 {
 	double t = (x - (hit.x + 8)) / (hit.w - 16);
 	t = std::clamp(t, 0.0, 1.0);
-	*OpacityOf(hit.kind) = std::round((0.2 + 0.8 * t) * 100) / 100.0;
+	if (hit.kind == kBarWidth)
+		gSettings.barWidth = kMinBarWidth + static_cast<int>(std::round(t * (kMaxBarWidth - kMinBarWidth) / 5.0)) * 5;
+	else
+		*OpacityOf(hit.kind) = std::round((0.2 + 0.8 * t) * 100) / 100.0;
 	ChangedBySlider();
 }
 
@@ -562,7 +574,8 @@ void SettingsPointerButton(uint32_t button, uint32_t state)
 		return;
 	const int index = HitAt(gX, gY);
 	if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
-		if (index >= 0 && (gWindow->hits[index].kind == kAccentOpacity || gWindow->hits[index].kind == kPanelOpacity)) {
+		if (index >= 0 && (gWindow->hits[index].kind == kAccentOpacity || gWindow->hits[index].kind == kPanelOpacity
+				|| gWindow->hits[index].kind == kBarWidth)) {
 			gWindow->drag = index;
 			MoveSlider(gWindow->hits[index], gX);
 		}
@@ -632,6 +645,7 @@ void SettingsPointerButton(uint32_t button, uint32_t state)
 			return;
 		case kAccentOpacity:
 		case kPanelOpacity:
+		case kBarWidth:
 			return;
 		case kClose:
 			RunLater([]() { CloseWindow(); });

@@ -35,7 +35,8 @@ struct Settings {
 	double accentOpacity = 1.0;				// 0.2 to 1
 	double panelOpacity = 1.0;
 	std::string headerIcon;					// a picture's file or an icon's name for the header (empty: the SnakeTracker snake)
-	int headerSize = 24;					// the header's height, and its icon's size
+	int headerSize = 24;					// the header's height, and its icon's size (24 to 128)
+	int barWidth = 150;					// the width of a vertical bar (100 to 400)
 };
 
 extern Settings gSettings;

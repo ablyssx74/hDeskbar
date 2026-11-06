@@ -106,8 +106,12 @@ void LoadSettings()
 		}
 		GError* error = nullptr;
 		const int size = g_key_file_get_integer(file, "hdeskbar", "header_size", &error);
-		if (error == nullptr && size >= 16 && size <= 64)
+		if (error == nullptr && size >= 24 && size <= 128)
 			gSettings.headerSize = size;
+		g_clear_error(&error);
+		const int barWidth = g_key_file_get_integer(file, "hdeskbar", "bar_width", &error);
+		if (error == nullptr && barWidth >= 100 && barWidth <= 400)
+			gSettings.barWidth = barWidth;
 		g_clear_error(&error);
 	}
 	g_key_file_free(file);
@@ -147,6 +151,7 @@ void SaveSettings()
 	g_key_file_set_double(file, "hdeskbar", "panel_opacity", gSettings.panelOpacity);
 	g_key_file_set_string(file, "hdeskbar", "header_icon", gSettings.headerIcon.c_str());
 	g_key_file_set_integer(file, "hdeskbar", "header_size", gSettings.headerSize);
+	g_key_file_set_integer(file, "hdeskbar", "bar_width", gSettings.barWidth);
 	const std::string path = ConfigPath();
 	g_mkdir_with_parents((std::string(g_get_user_config_dir()) + "/hdeskbar").c_str(), 0755);
 	g_key_file_save_to_file(file, path.c_str(), nullptr);

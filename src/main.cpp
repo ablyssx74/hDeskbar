@@ -224,7 +224,6 @@ constexpr int kCell = 22;				// a tray icon's cell
 constexpr int kTrayIcon = 16;
 constexpr int kTabHeight = 24;			// a program's tab
 constexpr int kWindowRow = 20;			// a window, under its program's tab
-constexpr int kVerticalWidth = 150;
 
 // The width of a line of text in the bar's font.
 double TextWidth(const std::string& text)
@@ -1288,8 +1287,12 @@ void PointerButton(void*, wl_pointer*, uint32_t serial, uint32_t, uint32_t butto
 	}
 	const int row = RowAt(gApp.pointerX, gApp.pointerY);
 	if (row >= 0) {
-		// a window of the program: bring it to the front
-		gToplevels.Activate(gLayout.rows[row].window);
+		// a window of the program: the one in front goes away, any other comes to the front
+		Toplevel* window = gLayout.rows[row].window;
+		if (window->activated && !window->minimized)
+			gToplevels.Minimize(window);
+		else
+			gToplevels.Activate(window);
 		return;
 	}
 	const int tab = TabAt(gApp.pointerX, gApp.pointerY);
@@ -1446,7 +1449,7 @@ void ApplyVisibility()
 		zwlr_layer_surface_v1_set_layer(gApp.layerSurface, raised ? ZWLR_LAYER_SHELL_V1_LAYER_TOP : ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM);
 	gApp.hidden = hidden;
 	if (vertical) {
-		gApp.width = hidden ? kStrip : kVerticalWidth;
+		gApp.width = hidden ? kStrip : gSettings.barWidth;
 		zwlr_layer_surface_v1_set_size(gApp.layerSurface, gApp.width, gApp.height);
 	} else {
 		gApp.height = hidden ? kStrip : HorizontalHeight();
@@ -1539,7 +1542,7 @@ void ApplyPlacement()
 	}
 	const bool vertical = IsVertical(gSettings.placement);
 	if (vertical) {
-		gApp.width = kVerticalWidth;
+		gApp.width = gSettings.barWidth;
 		gApp.height = 2 + HeaderHeight() + kRowHeight;
 	} else
 		gApp.height = HorizontalHeight();
