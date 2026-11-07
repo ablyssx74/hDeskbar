@@ -26,6 +26,8 @@ constexpr int kRow = 22;			// a row
 constexpr int kSeparator = 7;		// a separator's
 constexpr int kPad = 4;			// above the first row and under the last
 constexpr double kMenuRadius = 10;		// the pill's round ends, and the radius of the trail's bends
+constexpr float kStep = 3.0f;			// a submenu row that is this much off its parent's row (px) is taken as level with it: a step that small
+							// can't hold the rounded corner and the fillet of a real one, which then show as a thorn
 constexpr int kOverlap = 20;			// a submenu opens this far over its parent, covering its arrows
 constexpr int kIconSize = 16;
 constexpr double kValueColumn = 54;		// the text of a bar row
@@ -211,7 +213,7 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 		const bool leftFlush = (childEdge && !childOnRight) || (onTrail && parentOnLeft);
 		const bool rightFlush = (childEdge && childOnRight) || (onTrail && !parentOnLeft);
 		const float x0 = leftFlush ? 0.0f : 3.0f, x1 = rightFlush ? w : w - 3.0f;
-		const bool expTop = onTrail && top < pTop - 0.5f, expBottom = onTrail && bottom > pBottom + 0.5f;
+		const bool expTop = onTrail && top < pTop - kStep, expBottom = onTrail && bottom > pBottom + kStep;
 		pieces.push_back({ x0, t, x1 - x0, b - t,
 			cutTop ? 0.0f : cornerR(leftFlush, onTrail && parentOnLeft && expTop),
 			cutTop ? 0.0f : cornerR(rightFlush, onTrail && !parentOnLeft && expTop),
@@ -251,7 +253,7 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 		top = std::max(top, 0.0f);
 		bottom = std::min(bottom, h);
 		if (bottom > top) {
-			const bool extTop = top < pTop - 0.5f, extBottom = bottom > pBottom + 0.5f;
+			const bool extTop = top < pTop - kStep, extBottom = bottom > pBottom + kStep;
 			// (a bar that starts at the edge of the menu, from the Deskbar, is straight at its outer edge, and round on the inside when
 			// it hangs from the top of the bar)
 			const float outerT = extTop ? kR : 0.0f, innerT = (extTop || (fromBar && top <= 0.5f && p->barAbove)) ? 0.0f : kR;
@@ -267,9 +269,9 @@ void DrawPill(Popup* p, cairo_t* cr, std::vector<char>* litRow, TrailBar* bar)
 			if (hasOwn && ownBottom > ownTop) {
 				const float ex = parentOnLeft ? kBarW : w - kBarW;
 				const int dx = parentOnLeft ? 1 : -1;
-				if (top < ownTop - 0.5f && !(fromBar && ownTop - top < kR))
+				if (top < ownTop - kStep && !(fromBar && ownTop - top < kR))
 					fillets.push_back({ ex, ownTop, dx, -1 });
-				if (bottom > ownBottom + 0.5f && !(fromBar && bottom - ownBottom < kR))
+				if (bottom > ownBottom + kStep && !(fromBar && bottom - ownBottom < kR))
 					fillets.push_back({ ex, ownBottom, dx, 1 });
 			}
 		}
